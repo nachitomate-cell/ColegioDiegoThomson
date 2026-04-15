@@ -37,11 +37,11 @@ const FieldValue = admin.firestore.FieldValue
 const Timestamp  = admin.firestore.Timestamp
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
-const ANIO         = 2025
+const ANIO         = 2026
 const MESES        = ['Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 const MONTO        = 87000
 const EMAIL_DOMAIN = 'portal.cdt'
-const PASSWORD_DEMO = 'Demo2025!'
+const PASSWORD_DEMO = 'Demo2026!'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ const DEMO_ESTUDIANTES = [
 
 // ─── Admin de demo ────────────────────────────────────────────────────────────
 const ADMIN_RUT      = '98.765.432-5'
-const ADMIN_PASSWORD = 'Admin2025!'
+const ADMIN_PASSWORD = 'Admin2026!'
 const ADMIN_NOMBRE   = 'Secretaría - Finanzas'
 
 // ─── Limpiar colecciones (excepto Admins) ─────────────────────────────────────

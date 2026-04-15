@@ -512,8 +512,9 @@ export default function AdminPage() {
   const [todasCuotas, setTodasCuotas]       = useState([])
   const [loadingTodas, setLoadingTodas]     = useState(true)
 
-  // ── Data: apoderados ──────────────────────────────────────────────────────
-  const [apoderados, setApoderados]         = useState([])
+  // ── Data: estudiantes ──────────────────────────────────────────────────────
+  const [apoderados, setApoderados]         = useState([])  // legado, para WhatsApp recordatorio
+  const [listaEstudiantes, setListaEstudiantes] = useState([])
   const [loadingApoderados, setLoadingApoderados] = useState(true)
 
   // ── Mapas auxiliares ──────────────────────────────────────────────────────
@@ -600,13 +601,17 @@ export default function AdminPage() {
     return () => unsub()
   }, [esAdmin])
 
-  // ── Fetch: apoderados ───────────────────────────────────────────────────────
+  // ── Fetch: estudiantes ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!esAdmin) return
-    const unsub = onSnapshot(collection(db, 'Apoderados'), (snapshot) => {
+    const unsub = onSnapshot(collection(db, 'Estudiantes'), (snapshot) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-      setApoderados(data)
+      setListaEstudiantes(data)
       setLoadingApoderados(false)
+      // actualizar mapa de nombres también
+      const entries = {}
+      data.forEach(e => { entries[e.id] = e.nombre })
+      setEstudiantesMap(prev => ({ ...prev, ...entries }))
     })
     return () => unsub()
   }, [esAdmin])
@@ -705,12 +710,17 @@ export default function AdminPage() {
     return lista
   }, [todasCuotas, filtroEstado, busqueda, estudiantesMap])
 
-  // ── Filtro de apoderados ───────────────────────────────────────────────────
+  // ── Filtro de estudiantes ─────────────────────────────────────────────────
   const apoderadosFiltrados = useMemo(() => {
-    if (!busqueda.trim()) return apoderados
+    if (!busqueda.trim()) return listaEstudiantes
     const q = busqueda.toLowerCase()
-    return apoderados.filter(a => a.nombre?.toLowerCase().includes(q) || a.rut?.toLowerCase().includes(q))
-  }, [apoderados, busqueda])
+    return listaEstudiantes.filter(e =>
+      e.nombre?.toLowerCase().includes(q) ||
+      e.rut?.toLowerCase().includes(q) ||
+      e.curso?.toLowerCase().includes(q) ||
+      e.apoderado_nombre?.toLowerCase().includes(q)
+    )
+  }, [listaEstudiantes, busqueda])
 
 
   // ── Guards ─────────────────────────────────────────────────────────────────
@@ -745,7 +755,7 @@ export default function AdminPage() {
   const tabItems = [
     { id: 'revision', label: 'Comprobantes', count: stats.enRevision },
     { id: 'todas',    label: 'Todas las cuotas', count: stats.total },
-    { id: 'apoderados', label: 'Apoderados', count: apoderados.length },
+    { id: 'apoderados', label: 'Estudiantes', count: listaEstudiantes.length },
     { id: 'resumen',  label: 'Resumen financiero' },
   ]
 
@@ -815,7 +825,7 @@ export default function AdminPage() {
               <SearchBar
                 value={busqueda}
                 onChange={setBusqueda}
-                placeholder={activeTab === 'apoderados' ? 'Buscar por nombre o RUT...' : 'Buscar estudiante o mes...'}
+                placeholder={activeTab === 'apoderados' ? 'Buscar por nombre, RUT o curso...' : 'Buscar estudiante o mes...'}
               />
             </div>
             {/* Quick Win #1: Botones de exportación */}
@@ -977,7 +987,7 @@ export default function AdminPage() {
         )}
 
 
-        {/* ── TAB: APODERADOS ────────────────────────────────────────────── */}
+        {/* ── TAB: ESTUDIANTES ───────────────────────────────────────────── */}
         {activeTab === 'apoderados' && (
           <>
             {loadingApoderados ? (
@@ -988,68 +998,60 @@ export default function AdminPage() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-surface-500 bg-surface-800">
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Nombre</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Estudiante</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">RUT</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Contacto</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Estudiantes</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Registro</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Acciones</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Curso</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Apoderado</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Contacto</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Estado cuotas</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {apoderadosFiltrados.map((a) => {
-                        // Calcular cuotas atrasadas de este apoderado para el botón WhatsApp
-                        const estIds = a.estudiantes_ids ?? []
-                        const cuotasAtrasadasApoderado = todasCuotas.filter(c => estIds.includes(c.estudianteId) && (c.estado === 'atrasado' || c.estado === 'pendiente'))
-                        const cuotasStr = cuotasAtrasadasApoderado.map(c => `${c.mes}`).join(', ')
+                      {apoderadosFiltrados.map((e) => {
+                        const cuotasEst = todasCuotas.filter(c => c.estudianteId === e.id)
+                        const atrasadas = cuotasEst.filter(c => c.estado === 'atrasado').length
+                        const pagadas   = cuotasEst.filter(c => c.estado === 'pagado').length
+                        const revision  = cuotasEst.filter(c => c.estado === 'en_revision').length
 
                         return (
-                          <tr key={a.id} className="border-b border-surface-500 hover:bg-surface-600/50 transition-colors">
-                            <td className="px-4 py-3.5 text-ink-primary text-sm font-medium">{a.nombre ?? '—'}</td>
-                            <td className="px-4 py-3.5 text-ink-secondary text-sm font-mono">{a.rut ?? '—'}</td>
-                            <td className="px-4 py-3.5">
+                          <tr key={e.id} className="border-b border-surface-500 hover:bg-surface-600/50 transition-colors">
+                            <td className="px-4 py-3.5 text-ink-primary text-sm font-medium">
+                              {e.nombre ?? '—'}
+                              {e.beca && <span className="ml-2 text-xs bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">Beca</span>}
+                            </td>
+                            <td className="px-4 py-3.5 text-ink-secondary text-sm font-mono">{e.rut ?? '—'}</td>
+                            <td className="px-4 py-3.5 text-ink-secondary text-sm">{e.curso ?? '—'}</td>
+                            <td className="px-4 py-3.5 text-ink-secondary text-sm hidden md:table-cell">{e.apoderado_nombre ?? <span className="text-ink-disabled italic">—</span>}</td>
+                            <td className="px-4 py-3.5 hidden md:table-cell">
                               <div className="space-y-0.5">
-                                <p className="text-ink-secondary text-sm">{a.email ?? <span className="text-ink-disabled italic">Sin correo</span>}</p>
-                                {a.telefono && <p className="text-ink-muted text-xs font-mono">📱 {a.telefono}</p>}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <div className="flex flex-wrap gap-1">
-                                {estIds.map((estId) => (
-                                  <span key={estId} className="text-xs bg-accent-bg text-accent-hover border border-accent-border px-2 py-0.5 rounded-full font-medium">
-                                    {estudiantesMap[estId] ?? estId.slice(0, 8) + '…'}
-                                  </span>
-                                ))}
-                                {estIds.length === 0 && <span className="text-ink-disabled text-xs italic">Sin estudiantes</span>}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3.5 text-ink-muted text-sm hidden md:table-cell">{a.created_at ? formatFecha(a.created_at.toDate()) : '—'}</td>
-                            <td className="px-4 py-3.5">
-                              <div className="flex items-center gap-1.5">
-                                {/* Quick Win #3: Botón WhatsApp */}
-                                {a.telefono ? (
+                                {e.email    && <p className="text-ink-secondary text-xs">{e.email}</p>}
+                                {e.telefono && (
                                   <button
-                                    onClick={() => abrirWhatsApp(a.telefono, a.nombre ?? 'Apoderado', cuotasStr)}
-                                    title="Enviar WhatsApp"
-                                    className="flex items-center gap-1 text-xs bg-[#25D366]/10 hover:bg-[#25D366] text-[#25D366] hover:text-white px-2.5 py-1.5 rounded-md font-medium border border-[#25D366]/30 transition-all"
+                                    onClick={() => {
+                                      const cuotasStr = cuotasEst.filter(c => c.estado === 'atrasado' || c.estado === 'pendiente').map(c => c.mes).join(', ')
+                                      abrirWhatsApp(e.telefono, e.apoderado_nombre ?? e.nombre, cuotasStr)
+                                    }}
+                                    className="flex items-center gap-1 text-xs bg-[#25D366]/10 hover:bg-[#25D366] text-[#25D366] hover:text-white px-2 py-1 rounded font-medium border border-[#25D366]/30 transition-all"
                                   >
-                                    💬 WhatsApp
+                                    💬 {e.telefono}
                                   </button>
-                                ) : (
-                                  <span className="text-ink-disabled text-xs italic">Sin tel.</span>
                                 )}
-                                {cuotasAtrasadasApoderado.length > 0 && (
-                                  <span className="text-xs bg-overdue-bg text-overdue border border-overdue-border px-2 py-0.5 rounded-full font-medium">
-                                    {cuotasAtrasadasApoderado.length} pend.
-                                  </span>
-                                )}
+                                {!e.email && !e.telefono && <span className="text-ink-disabled text-xs italic">Sin contacto</span>}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {pagadas > 0   && <span className="text-xs bg-paid-bg text-paid border border-paid-border px-2 py-0.5 rounded-full">✓ {pagadas}</span>}
+                                {revision > 0  && <span className="text-xs bg-review-bg text-review border border-review-border px-2 py-0.5 rounded-full">⏳ {revision}</span>}
+                                {atrasadas > 0 && <span className="text-xs bg-overdue-bg text-overdue border border-overdue-border px-2 py-0.5 rounded-full font-semibold">⚠ {atrasadas}</span>}
+                                {cuotasEst.length === 0 && <span className="text-ink-disabled text-xs italic">Sin cuotas</span>}
                               </div>
                             </td>
                           </tr>
                         )
                       })}
                       {apoderadosFiltrados.length === 0 && (
-                        <tr><td colSpan={6} className="px-4 py-12 text-center text-ink-muted text-sm">No se encontraron apoderados.</td></tr>
+                        <tr><td colSpan={6} className="px-4 py-12 text-center text-ink-muted text-sm">No se encontraron estudiantes.</td></tr>
                       )}
                     </tbody>
                   </table>
