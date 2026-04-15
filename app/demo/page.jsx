@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { LOGO_SRC } from '../lib/logo'
 import { useRouter } from 'next/navigation'
 
 const STEPS = [
@@ -184,7 +185,7 @@ export default function DemoPage() {
       {/* Header */}
       <header className="fixed top-1 left-0 right-0 z-40 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <img src="/logo.jpg" alt="CDT" className="w-7 h-7 rounded-md object-cover ring-1 ring-white/20" />
+          <img src={LOGO_SRC} alt="CDT" className="w-7 h-7 rounded-md object-cover ring-1 ring-white/20" />
           <span className="text-white/60 text-xs font-medium">Demo · Colegio Diego Thomson</span>
         </div>
         <div className="flex items-center gap-1">

@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useSearchParams, useRouter } from 'next/navigation'
+import { LOGO_SRC } from '../../lib/logo'
 import { Suspense }                   from 'react'
 
 const formatCLP = (monto) =>
@@ -130,7 +131,7 @@ function ResultadoContent() {
 
         {/* Logo del colegio */}
         <div className="flex items-center justify-center gap-2 mt-6 pt-4 border-t border-surface-500">
-          <img src="/logo.jpg" alt="CDT" className="w-5 h-5 rounded object-cover" />
+          <img src={LOGO_SRC} alt="CDT" className="w-5 h-5 rounded object-cover" />
           <span className="text-ink-muted text-xs">Colegio Diego Thomson · Portal Escolar</span>
         </div>
 
