@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useSearchParams, useRouter } from 'next/navigation'
-import { LOGO_SRC } from '../../lib/logo'
+import { LOGO_SRC } from '../../../lib/logo'
 import { Suspense }                   from 'react'
 
 const formatCLP = (monto) =>

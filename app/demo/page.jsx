@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { LOGO_SRC } from '../lib/logo'
+import { LOGO_SRC } from '../../lib/logo'
 import { useRouter } from 'next/navigation'
 
 const STEPS = [
