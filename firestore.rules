@@ -8,53 +8,51 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/Admins/$(request.auth.uid));
     }
 
-    function esApoderadoDe(estudianteId) {
-      return request.auth != null &&
-        exists(/databases/$(database)/documents/Apoderados/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/Apoderados/$(request.auth.uid))
-          .data.estudiantes_ids.hasAny([estudianteId]);
+    function esElEstudiante(estudianteId) {
+      return request.auth != null && request.auth.uid == estudianteId;
     }
 
     // ── Admins ─────────────────────────────────────────────────────────────────
-    // Solo lectura (el admin no puede darse permisos a sí mismo desde el cliente)
     match /Admins/{uid} {
       allow read:  if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
 
-    // ── Apoderados ─────────────────────────────────────────────────────────────
-    match /Apoderados/{uid} {
-      allow read:  if request.auth != null &&
-                     (request.auth.uid == uid || esAdmin());
-      allow create, update: if esAdmin();
-      allow delete: if false;
-    }
-
     // ── Estudiantes ────────────────────────────────────────────────────────────
+    // El doc ID == Firebase Auth UID del estudiante.
+    // El estudiante puede leer y actualizar su propio doc (p.ej. quitar requiere_cambio_clave).
     match /Estudiantes/{estudianteId} {
-      allow read:  if esAdmin() || esApoderadoDe(estudianteId);
+      allow read:   if esElEstudiante(estudianteId) || esAdmin();
       allow create: if esAdmin();
-      allow update, delete: if false;
+      allow update: if esAdmin() ||
+                      (esElEstudiante(estudianteId) &&
+                       request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['requiere_cambio_clave']));
+      allow delete: if false;
     }
 
     // ── Cuotas ─────────────────────────────────────────────────────────────────
+    // El campo estudiante_id == Firebase Auth UID del estudiante.
     match /Cuotas/{cuotaId} {
-      // Admin lee todo · apoderado solo lee las cuotas de sus hijos
-      allow read: if esAdmin() ||
-                     (request.auth != null &&
-                      esApoderadoDe(resource.data.estudiante_id));
+      allow read:   if esAdmin() ||
+                      (request.auth != null &&
+                       resource.data.estudiante_id == request.auth.uid);
 
-      // Admin puede actualizar cualquier campo (aprobar/rechazar)
-      // Apoderado solo puede cambiar a 'en_revision' + subir comprobante
       allow update: if esAdmin() ||
-                       (request.auth != null &&
-                        request.resource.data.estado == 'en_revision' &&
-                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(
-                          ['estado', 'comprobante_url', 'fecha_envio']
-                        ));
+                      (request.auth != null &&
+                       resource.data.estudiante_id == request.auth.uid &&
+                       request.resource.data.estado == 'en_revision' &&
+                       request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['estado', 'comprobante_url', 'fecha_envio']));
 
       allow create: if esAdmin();
       allow delete: if false;
+    }
+
+    // ── Apoderados (colección legada, solo admin) ──────────────────────────────
+    match /Apoderados/{uid} {
+      allow read:   if esAdmin();
+      allow write:  if esAdmin();
     }
   }
 }
