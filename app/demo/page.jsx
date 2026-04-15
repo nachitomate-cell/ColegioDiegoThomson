@@ -59,9 +59,9 @@ const STEPS = [
     bg: 'from-emerald-950 to-slate-900',
     accent: 'text-emerald-400',
     cuentas: [
-      { label: 'Carlos Muñoz — Buen pagador (8 pagadas)', rut: '15.678.901-1', pass: 'Demo2025!', tag: '✅ Al día' },
-      { label: 'María González — Comprobante pendiente', rut: '12.345.678-5', pass: 'Demo2025!', tag: '🟡 En revisión' },
-      { label: 'Ana Herrera — Apoderada morosa', rut: '9.876.543-3', pass: 'Demo2025!', tag: '🔴 6 cuotas atrasadas' },
+      { label: 'Sofía González — Buen historial (8 pagadas)', rut: '20.123.456-5', pass: 'Demo2025!', tag: '✅ Al día' },
+      { label: 'Diego Muñoz — Comprobante en revisión', rut: '21.234.567-9', pass: 'Demo2025!', tag: '🟡 En revisión' },
+      { label: 'Valentina Herrera — 6 cuotas atrasadas', rut: '19.765.432-5', pass: 'Demo2025!', tag: '🔴 6 cuotas atrasadas' },
     ],
   },
   {

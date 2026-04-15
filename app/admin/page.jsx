@@ -201,10 +201,11 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
 
   const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }))
 
-  // Derivar contraseña inicial: primeros 4 dígitos del RUT del estudiante
+  // Derivar contraseña inicial: primeros 6 dígitos del RUT del estudiante
+  // (Firebase Auth exige mínimo 6 caracteres en el client SDK)
   const calcularClave = (rut) => {
     const soloDigitos = rut.replace(/[^0-9]/g, '')
-    return soloDigitos.slice(0, 4) || ''
+    return soloDigitos.slice(0, 6) || ''
   }
 
   const handleSubmit = async (e) => {
@@ -223,8 +224,8 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
 
       // Contraseña inicial = primeros 4 dígitos del RUT del estudiante
       const clave = calcularClave(form.rutEstudiante)
-      if (clave.length < 4) {
-        setError('El RUT del estudiante debe tener al menos 4 dígitos para generar la contraseña.')
+      if (clave.length < 6) {
+        setError('El RUT del estudiante debe tener al menos 6 dígitos para generar la contraseña.')
         setGuardando(false)
         return
       }
@@ -336,7 +337,7 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
                   className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
                   placeholder="12.345.678-9"
                 />
-                {clavePreview.length >= 4 && (
+                {clavePreview.length >= 6 && (
                   <p className="text-ink-muted text-xs mt-1">
                     Clave temporal: <span className="font-mono font-bold text-ink-secondary">{clavePreview}</span>
                   </p>
