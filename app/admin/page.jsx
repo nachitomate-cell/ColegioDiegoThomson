@@ -32,6 +32,9 @@ const formatHora = (date) => {
   return date.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
 }
 
+// ── Valor base mensual (fácil de cambiar) ─────────────────────────────────────
+const MONTO_BASE_CUOTA = 87_000
+
 const MESES = [
   'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto',
   'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
@@ -182,6 +185,8 @@ function ModalComprobante({ url, onClose }) {
 
 function ModalRegistrarApoderado({ onClose, onSuccess }) {
   const [form, setForm] = useState({ nombre: '', rut: '', email: '', telefono: '', password: '', curso: '', nombreEstudiante: '' })
+  const [tieneBeca, setTieneBeca] = useState(false)
+  const [montoBeca, setMontoBeca] = useState('')
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState(null)
   const [exito, setExito] = useState(false)
@@ -194,6 +199,16 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
     setError(null)
 
     try {
+      // Validar monto beca si aplica
+      const montoFinal = tieneBeca
+        ? parseInt(montoBeca, 10)
+        : MONTO_BASE_CUOTA
+      if (tieneBeca && (isNaN(montoFinal) || montoFinal <= 0)) {
+        setError('Ingresa un valor de cuota válido para la beca.')
+        setGuardando(false)
+        return
+      }
+
       // 1. Crear el usuario en Firebase Auth con email basado en RUT
       // Mismo formato que usa el login: eliminar puntos, mantener guión, minúsculas
       const rutLimpio = form.rut.replace(/\./g, '').trim().toLowerCase()
@@ -218,11 +233,13 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
         })
       )
 
-      // 3. Crear doc del Estudiante
+      // 3. Crear doc del Estudiante (guarda si tiene beca y el monto acordado)
       const estRef = await addDoc(collection(db, 'Estudiantes'), {
         nombre:        form.nombreEstudiante,
         curso:         form.curso,
         apoderado_uid: nuevoUser.uid,
+        beca:          tieneBeca,
+        monto_cuota:   montoFinal,
         created_at:    serverTimestamp(),
       })
 
@@ -231,15 +248,15 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
         estudiantes_ids: [estRef.id],
       })
 
-      // 5. Generar las 10 cuotas del año
+      // 5. Generar las 10 cuotas Marzo–Diciembre con el monto correspondiente
       const anio = new Date().getFullYear()
       for (let i = 0; i < MESES.length; i++) {
-        const mesIdx = i + 2 // Marzo = mes 3 (index 2)
+        const mesIdx = i + 2 // Marzo = índice 2 (0-based), Diciembre = 11
         await addDoc(collection(db, 'Cuotas'), {
           estudiante_id:    estRef.id,
           mes:              MESES[i],
           anio:             anio,
-          monto:            85000,
+          monto:            montoFinal,
           estado:           'pendiente',
           fecha_vencimiento: Timestamp.fromDate(new Date(anio, mesIdx, 5)),
           comprobante_url:  null,
@@ -324,6 +341,42 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
                 <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Curso</label>
                 <input required value={form.curso} onChange={(e) => handleChange('curso', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="7° Básico A" />
               </div>
+            </div>
+
+            {/* ── Beca / Arancel Diferenciado ─────────────────────────────── */}
+            <div className={`rounded-xl border-2 transition-colors px-4 py-3 ${tieneBeca ? 'border-amber-300 bg-amber-50' : 'border-surface-400 bg-surface-700'}`}>
+              <label className="flex items-center gap-3 cursor-pointer select-none">
+                <div
+                  onClick={() => { setTieneBeca(v => !v); setMontoBeca('') }}
+                  className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${tieneBeca ? 'bg-amber-400' : 'bg-surface-400'}`}
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${tieneBeca ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </div>
+                <div>
+                  <p className="text-ink-primary text-sm font-semibold">Beca / Arancel diferenciado</p>
+                  <p className="text-ink-muted text-xs">El valor estándar es {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(MONTO_BASE_CUOTA)}/mes</p>
+                </div>
+              </label>
+
+              {tieneBeca && (
+                <div className="mt-3">
+                  <label className="block text-amber-700 text-xs font-semibold mb-1 uppercase tracking-wide">Nuevo valor de cuota mensual ($)</label>
+                  <input
+                    required={tieneBeca}
+                    type="number"
+                    min={1}
+                    value={montoBeca}
+                    onChange={(e) => setMontoBeca(e.target.value)}
+                    className="w-full bg-white border-2 border-amber-300 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200 transition-all"
+                    placeholder="Ej: 50000"
+                  />
+                  {montoBeca && !isNaN(parseInt(montoBeca)) && (
+                    <p className="text-amber-700 text-xs mt-1">
+                      Se generarán 10 cuotas de {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca))} c/u · Total año: {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca) * 10)}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {error && (
