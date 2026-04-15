@@ -46,7 +46,7 @@ function PantallaLoading({ mensaje = 'Cargando...' }) {
       <div className="flex flex-col items-center gap-5">
         <div className="relative w-28 h-28 rounded-2xl overflow-hidden shadow-card-lg ring-1 ring-surface-500">
           <img
-            src="/Logo1.jfif"
+            src="/logo.jpg"
             alt="Colegio Diego Thomson"
             className="w-full h-full object-cover"
           />
@@ -678,7 +678,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             <div className="relative w-7 h-7 rounded-lg overflow-hidden ring-1 ring-surface-400 flex-shrink-0">
               <img
-                src="/Logo1.jfif"
+                src="/logo.jpg"
                 alt="Colegio Diego Thomson"
                 className="w-full h-full object-cover"
               />

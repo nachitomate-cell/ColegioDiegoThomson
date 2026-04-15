@@ -674,7 +674,7 @@ export default function AdminPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="relative w-7 h-7 rounded-lg overflow-hidden ring-1 ring-surface-400 flex-shrink-0">
-              <img src="/Logo1.jfif" alt="Logo" className="w-full h-full object-cover" />
+              <img src="/logo.jpg" alt="Logo" className="w-full h-full object-cover" />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-ink-primary font-semibold text-sm">Portal Escolar</span>
