@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "Cuotas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estudiante_id",    "order": "ASCENDING" },
+        { "fieldPath": "fecha_vencimiento", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

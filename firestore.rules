@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    function esAdmin() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/Admins/$(request.auth.uid));
+    }
+
+    function esApoderadoDe(estudianteId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/Apoderados/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/Apoderados/$(request.auth.uid))
+          .data.estudiantes_ids.hasAny([estudianteId]);
+    }
+
+    // ── Admins ─────────────────────────────────────────────────────────────────
+    // Solo lectura (el admin no puede darse permisos a sí mismo desde el cliente)
+    match /Admins/{uid} {
+      allow read:  if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // ── Apoderados ─────────────────────────────────────────────────────────────
+    match /Apoderados/{uid} {
+      allow read:  if request.auth != null &&
+                     (request.auth.uid == uid || esAdmin());
+      allow create, update: if esAdmin();
+      allow delete: if false;
+    }
+
+    // ── Estudiantes ────────────────────────────────────────────────────────────
+    match /Estudiantes/{estudianteId} {
+      allow read:  if esAdmin() || esApoderadoDe(estudianteId);
+      allow create: if esAdmin();
+      allow update, delete: if false;
+    }
+
+    // ── Cuotas ─────────────────────────────────────────────────────────────────
+    match /Cuotas/{cuotaId} {
+      // Admin lee todo · apoderado solo lee las cuotas de sus hijos
+      allow read: if esAdmin() ||
+                     (request.auth != null &&
+                      esApoderadoDe(resource.data.estudiante_id));
+
+      // Admin puede actualizar cualquier campo (aprobar/rechazar)
+      // Apoderado solo puede cambiar a 'en_revision' + subir comprobante
+      allow update: if esAdmin() ||
+                       (request.auth != null &&
+                        request.resource.data.estado == 'en_revision' &&
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+                          ['estado', 'comprobante_url', 'fecha_envio']
+                        ));
+
+      allow create: if esAdmin();
+      allow delete: if false;
+    }
+  }
+}

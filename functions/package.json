@@ -1,0 +1,19 @@
+{
+  "name": "colegio-diego-thomson-functions",
+  "description": "Firebase Cloud Functions — Portal de Pagos Colegio Diego Thomson",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.2.0",
+    "firebase-functions": "^6.0.0",
+    "@sendgrid/mail": "^8.1.1"
+  },
+  "private": true
+}

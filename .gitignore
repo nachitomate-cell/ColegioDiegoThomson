@@ -1,0 +1,19 @@
+# Secretos — NUNCA subir al repositorio
+.env.local
+.env*.local
+serviceAccountKey.json
+scripts/serviceAccountKey.json.json
+
+# Claude Code
+.claude/
+
+# Dependencias
+node_modules
+
+# Build de Next.js
+.next
+out
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
