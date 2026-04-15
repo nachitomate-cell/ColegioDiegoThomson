@@ -8,9 +8,9 @@ import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage'
 import { useRouter }     from 'next/navigation'
 
 import { auth, db, storage } from '../firebase/firebaseConfig'
-import { useAuth }       from '../hooks/useAuth'
-import { useApoderado }  from '../hooks/useApoderado'
-import { useCuotas }     from '../hooks/useCuotas'
+import { useAuth }        from '../hooks/useAuth'
+import { useEstudiante }  from '../hooks/useEstudiante'
+import { useCuotas }      from '../hooks/useCuotas'
 import { generarReciboPDF } from '../lib/generarReciboPDF'
 import { LOGO_SRC }         from '../lib/logo'
 
@@ -575,13 +575,11 @@ function ModalTransferencia({ cuota, onClose }) {
 export default function Dashboard() {
   const router = useRouter()
 
-  const { user, loading: authLoading }                                    = useAuth()
-  const { apoderado, loading: apoderadoLoading, error: apoderadoError }   = useApoderado(user?.uid)
+  const { user, loading: authLoading }                                         = useAuth()
+  const { estudiante, loading: estudianteLoading, error: estudianteError }     = useEstudiante(user?.uid)
 
-  const [estudianteId, setEstudianteId] = useState(null)
-  const estudianteIdResuelto = estudianteId ?? apoderado?.estudiantes?.[0]?.id ?? null
-
-  const { cuotas, loading: cuotasLoading, error: cuotasError } = useCuotas(estudianteIdResuelto)
+  // El estudiante logueado tiene Auth UID = ID del doc Estudiantes = ID para cuotas
+  const { cuotas, loading: cuotasLoading, error: cuotasError } = useCuotas(user?.uid ?? null)
 
   const [modalCuota, setModalCuota] = useState(null)
 
@@ -637,10 +635,10 @@ export default function Dashboard() {
   // Quick Win #2: Descargar recibo PDF
   const handleDescargarRecibo = (cuota) => {
     generarReciboPDF({
-      nombreEstudiante: estudiante?.nombre ?? '',
-      curso:            estudiante?.curso ?? '',
-      nombreApoderado:  apoderado?.nombre ?? '',
-      rutApoderado:     apoderado?.rut ?? '',
+      nombreEstudiante: estudiante?.nombre         ?? '',
+      curso:            estudiante?.curso          ?? '',
+      nombreApoderado:  estudiante?.apoderado_nombre ?? '',
+      rutApoderado:     estudiante?.apoderado_rut    ?? '',
       mes:              cuota.mes,
       anio:             cuota.anio,
       monto:            cuota.monto,
@@ -659,14 +657,12 @@ export default function Dashboard() {
     return <PantallaLoading mensaje="Redirigiendo..." />
   }
 
-  // ── Cargando datos del apoderado → skeleton completo del dashboard ─────────
-  if (apoderadoLoading) return <DashboardSkeleton />
+  // ── Cargando datos del estudiante → skeleton completo del dashboard ────────
+  if (estudianteLoading) return <DashboardSkeleton />
 
   // ── Error o perfil no encontrado ───────────────────────────────────────────
-  if (apoderadoError)  return <PantallaError mensaje={apoderadoError.message} />
-  if (!apoderado)      return <PantallaError mensaje="No se encontró tu perfil de apoderado. Contacta al colegio." />
-
-  const estudiante = apoderado.estudiantes.find((e) => e.id === estudianteIdResuelto)
+  if (estudianteError) return <PantallaError mensaje={estudianteError.message} />
+  if (!estudiante)     return <PantallaError mensaje="No se encontró tu perfil de estudiante. Contacta al colegio." />
 
   return (
     <div className="min-h-screen bg-surface-900 text-ink-primary font-sans">
@@ -687,11 +683,11 @@ export default function Dashboard() {
             <span className="text-ink-primary font-semibold text-sm">Portal Escolar</span>
           </div>
 
-          {/* Info apoderado + logout */}
+          {/* Info estudiante + logout */}
           <div className="flex items-center gap-3">
             <div className="text-right hidden sm:block">
-              <p className="text-ink-primary text-xs font-medium leading-tight">{apoderado.nombre}</p>
-              <p className="text-ink-muted text-xs leading-tight">{apoderado.rut}</p>
+              <p className="text-ink-primary text-xs font-medium leading-tight">{estudiante.nombre}</p>
+              <p className="text-ink-muted text-xs leading-tight">{estudiante.rut} · {estudiante.curso}</p>
             </div>
             <button
               onClick={handleLogout}
@@ -710,23 +706,19 @@ export default function Dashboard() {
         <div className="space-y-3">
           <div>
             <h1 className="text-ink-primary text-xl font-bold">
-              Bienvenido, {apoderado.nombre.split(' ')[0]}
+              Hola, {estudiante.nombre.split(' ')[0]}
             </h1>
-            {estudiante && (
-              <p className="text-ink-muted text-sm mt-0.5">
-                Visualizando el estado de pagos de{' '}
-                <span className="text-ink-secondary">{estudiante.nombre}</span> · {estudiante.curso}
-              </p>
-            )}
+            <p className="text-ink-muted text-sm mt-0.5">
+              Portal del Estudiante ·{' '}
+              <span className="text-ink-secondary">{estudiante.curso}</span>
+              {estudiante.beca && (
+                <span className="ml-2 text-amber-500 text-xs font-semibold">★ Beca</span>
+              )}
+            </p>
           </div>
-          <SelectorEstudiante
-            estudiantes={apoderado.estudiantes}
-            seleccionado={estudianteIdResuelto}
-            onChange={(id) => setEstudianteId(id)}
-          />
         </div>
 
-        {!cuotasLoading && !cuotasError && estudiante && (
+        {!cuotasLoading && !cuotasError && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-1">
               <TarjetaProximaCuota

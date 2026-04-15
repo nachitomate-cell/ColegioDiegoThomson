@@ -16,11 +16,6 @@ function validarPassword(pw) {
   return null // válida
 }
 
-// El email interno usa el dominio portal.cdt → el RUT está antes del "@"
-function rutDesdeEmail(email) {
-  return email?.split('@')[0]?.toUpperCase() ?? null
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function CambiarClavePage() {
@@ -68,12 +63,9 @@ export default function CambiarClavePage() {
       await updatePassword(user, nueva)
 
       // ── 2. Marcar como clave ya cambiada en Firestore ─────────────────────
-      const rut = rutDesdeEmail(user.email)
-      if (rut) {
-        await updateDoc(doc(db, 'Apoderados', rut), {
-          requiere_cambio_clave: false,
-        })
-      }
+      await updateDoc(doc(db, 'Estudiantes', user.uid), {
+        requiere_cambio_clave: false,
+      })
 
       // ── 3. Mostrar confirmación y redirigir ───────────────────────────────
       setSuccess(true)

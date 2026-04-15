@@ -8,7 +8,7 @@ import { auth, db } from '../../firebase/firebaseConfig'
 
 // ─── Email interno derivado del RUT ──────────────────────────────────────────
 // Firebase Auth requiere email. Usamos un dominio interno para derivarlo del RUT.
-// El admin NUNCA crea cuentas con email real — el seed lo hace automáticamente.
+// El admin crea cuentas con el RUT del ESTUDIANTE como base.
 // Formato: "12345678-9" → "12345678-9@portal.cdt"
 const EMAIL_DOMAIN = 'portal.cdt'
 
@@ -108,11 +108,11 @@ export default function LoginPage() {
         return
       }
 
-      // ── 4. Verificar si el apoderado debe cambiar su clave ───────────────────
-      // El ID del documento en "Apoderados" es el Firebase Auth UID
-      const apoderadoSnap   = await getDoc(doc(db, 'Apoderados', uid))
+      // ── 4. Verificar si el estudiante debe cambiar su clave ─────────────────
+      // El ID del documento en "Estudiantes" es el Firebase Auth UID
+      const estudianteSnap = await getDoc(doc(db, 'Estudiantes', uid))
 
-      if (apoderadoSnap.exists() && apoderadoSnap.data().requiere_cambio_clave === true) {
+      if (estudianteSnap.exists() && estudianteSnap.data().requiere_cambio_clave === true) {
         router.push('/cambiar-clave')
       } else {
         router.push('/dashboard')
@@ -125,7 +125,7 @@ export default function LoginPage() {
         case 'auth/invalid-credential':
           // Firebase v9+ unifica "usuario no existe" y "contraseña incorrecta"
           // en auth/invalid-credential por seguridad (evita enumeración de users)
-          setError('RUT no registrado en el sistema o contraseña incorrecta.')
+          setError('RUT del estudiante no registrado o contraseña incorrecta.')
           break
         case 'auth/wrong-password':
           setError('Contraseña incorrecta.')
@@ -171,7 +171,7 @@ export default function LoginPage() {
           {/* Campo RUT */}
           <div>
             <label className="block text-ink-muted text-xs font-semibold mb-1.5 uppercase tracking-wide">
-              RUT del apoderado
+              RUT del Estudiante
             </label>
             <div className="relative">
               <input

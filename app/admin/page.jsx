@@ -181,17 +181,31 @@ function ModalComprobante({ url, onClose }) {
 }
 
 
-// ─── MODAL REGISTRAR APODERADO ────────────────────────────────────────────────
+// ─── MODAL REGISTRAR ESTUDIANTE ───────────────────────────────────────────────
 
 function ModalRegistrarApoderado({ onClose, onSuccess }) {
-  const [form, setForm] = useState({ nombre: '', rut: '', email: '', telefono: '', password: '', curso: '', nombreEstudiante: '' })
+  const [form, setForm] = useState({
+    nombreEstudiante: '',
+    rutEstudiante:    '',
+    curso:            '',
+    nombreApoderado:  '',
+    email:            '',
+    telefono:         '',
+  })
   const [tieneBeca, setTieneBeca] = useState(false)
   const [montoBeca, setMontoBeca] = useState('')
   const [guardando, setGuardando] = useState(false)
-  const [error, setError] = useState(null)
-  const [exito, setExito] = useState(false)
+  const [error, setError]         = useState(null)
+  const [exito, setExito]         = useState(false)
+  const [claveGenerada, setClaveGenerada] = useState('')
 
   const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }))
+
+  // Derivar contraseña inicial: primeros 4 dígitos del RUT del estudiante
+  const calcularClave = (rut) => {
+    const soloDigitos = rut.replace(/[^0-9]/g, '')
+    return soloDigitos.slice(0, 4) || ''
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -200,79 +214,73 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
 
     try {
       // Validar monto beca si aplica
-      const montoFinal = tieneBeca
-        ? parseInt(montoBeca, 10)
-        : MONTO_BASE_CUOTA
+      const montoFinal = tieneBeca ? parseInt(montoBeca, 10) : MONTO_BASE_CUOTA
       if (tieneBeca && (isNaN(montoFinal) || montoFinal <= 0)) {
         setError('Ingresa un valor de cuota válido para la beca.')
         setGuardando(false)
         return
       }
 
-      // 1. Crear el usuario en Firebase Auth con email basado en RUT
-      // Mismo formato que usa el login: eliminar puntos, mantener guión, minúsculas
-      const rutLimpio = form.rut.replace(/\./g, '').trim().toLowerCase()
+      // Contraseña inicial = primeros 4 dígitos del RUT del estudiante
+      const clave = calcularClave(form.rutEstudiante)
+      if (clave.length < 4) {
+        setError('El RUT del estudiante debe tener al menos 4 dígitos para generar la contraseña.')
+        setGuardando(false)
+        return
+      }
+
+      // 1. Crear cuenta Firebase Auth con RUT del estudiante
+      // Formato email interno: "12345678-9@portal.cdt"
+      const rutLimpio    = form.rutEstudiante.replace(/\./g, '').trim().toLowerCase()
       const emailInterno = `${rutLimpio}@portal.cdt`
 
-      // Guardar el auth actual del admin para no desloguearnos
-      const adminUser = auth.currentUser
+      const { user: nuevoUser } = await createUserWithEmailAndPassword(auth, emailInterno, clave)
+      const uid = nuevoUser.uid
 
-      const { user: nuevoUser } = await createUserWithEmailAndPassword(auth, emailInterno, form.password)
-
-      // 2. Crear doc del Apoderado en Firestore
-      await updateDoc(doc(db, 'Apoderados', nuevoUser.uid), {}).catch(() => {})
-      const apoderadoRef = doc(db, 'Apoderados', nuevoUser.uid)
+      // 2. Crear doc Estudiantes/{uid} — el uid ES el doc ID
       await import('firebase/firestore').then(({ setDoc }) =>
-        setDoc(apoderadoRef, {
-          nombre:          form.nombre,
-          email:           form.email || null,
-          telefono:        form.telefono || null,
-          rut:             form.rut,
-          estudiantes_ids: [],
-          created_at:      serverTimestamp(),
+        setDoc(doc(db, 'Estudiantes', uid), {
+          nombre:            form.nombreEstudiante,
+          rut:               form.rutEstudiante,
+          curso:             form.curso,
+          apoderado_nombre:  form.nombreApoderado || null,
+          apoderado_rut:     null,
+          email:             form.email     || null,
+          telefono:          form.telefono  || null,
+          beca:              tieneBeca,
+          monto_cuota:       montoFinal,
+          requiere_cambio_clave: true,
+          created_at:        serverTimestamp(),
         })
       )
 
-      // 3. Crear doc del Estudiante (guarda si tiene beca y el monto acordado)
-      const estRef = await addDoc(collection(db, 'Estudiantes'), {
-        nombre:        form.nombreEstudiante,
-        curso:         form.curso,
-        apoderado_uid: nuevoUser.uid,
-        beca:          tieneBeca,
-        monto_cuota:   montoFinal,
-        created_at:    serverTimestamp(),
-      })
-
-      // 4. Vincular estudiante al apoderado
-      await updateDoc(apoderadoRef, {
-        estudiantes_ids: [estRef.id],
-      })
-
-      // 5. Generar las 10 cuotas Marzo–Diciembre con el monto correspondiente
+      // 3. Generar las 10 cuotas Marzo–Diciembre
+      // El estudiante_id de las cuotas = uid (= Estudiantes doc ID)
       const anio = new Date().getFullYear()
       for (let i = 0; i < MESES.length; i++) {
         const mesIdx = i + 2 // Marzo = índice 2 (0-based), Diciembre = 11
         await addDoc(collection(db, 'Cuotas'), {
-          estudiante_id:    estRef.id,
-          mes:              MESES[i],
-          anio:             anio,
-          monto:            montoFinal,
-          estado:           'pendiente',
+          estudiante_id:     uid,
+          mes:               MESES[i],
+          anio:              anio,
+          monto:             montoFinal,
+          estado:            'pendiente',
           fecha_vencimiento: Timestamp.fromDate(new Date(anio, mesIdx, 5)),
-          comprobante_url:  null,
-          fecha_envio:      null,
-          fecha_pago:       null,
-          created_at:       serverTimestamp(),
+          comprobante_url:   null,
+          fecha_envio:       null,
+          fecha_pago:        null,
+          created_at:        serverTimestamp(),
         })
       }
 
+      setClaveGenerada(clave)
       setExito(true)
-      setTimeout(() => { onSuccess?.(); onClose() }, 1500)
+      setTimeout(() => { onSuccess?.(); onClose() }, 4000)
 
     } catch (err) {
       console.error('[ModalRegistrar] Error:', err)
       if (err.code === 'auth/email-already-in-use') {
-        setError('Ya existe un apoderado registrado con ese RUT.')
+        setError('Ya existe una cuenta registrada con ese RUT de estudiante.')
       } else {
         setError(err.message)
       }
@@ -281,41 +289,74 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
     }
   }
 
+  // Preview de la clave mientras el admin escribe el RUT
+  const clavePreview = calcularClave(form.rutEstudiante)
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={(e) => e.target === e.currentTarget && !guardando && onClose()}>
-      <div className="bg-white border border-surface-400 rounded-2xl shadow-card-lg w-full max-w-md animate-slide-up">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-500">
-          <h2 className="text-ink-primary font-semibold text-base">Registrar nuevo apoderado</h2>
+      <div className="bg-white border border-surface-400 rounded-2xl shadow-card-lg w-full max-w-md max-h-[90vh] overflow-y-auto animate-slide-up">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-500 sticky top-0 bg-white z-10">
+          <h2 className="text-ink-primary font-semibold text-base">Registrar nuevo estudiante</h2>
           <button onClick={onClose} disabled={guardando} className="text-ink-muted hover:text-ink-primary text-xl leading-none">×</button>
         </div>
 
         {exito ? (
-          <div className="px-6 py-12 text-center space-y-3">
+          <div className="px-6 py-10 text-center space-y-4">
             <div className="w-16 h-16 rounded-full bg-paid-bg border-2 border-paid flex items-center justify-center mx-auto">
               <svg className="w-8 h-8 text-paid" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
             </div>
-            <p className="text-ink-primary font-semibold">¡Apoderado registrado!</p>
-            <p className="text-ink-muted text-sm">Se crearon las 10 cuotas del año automáticamente.</p>
+            <p className="text-ink-primary font-semibold">¡Estudiante registrado!</p>
+            <p className="text-ink-muted text-sm">Se crearon las 10 cuotas (Marzo–Diciembre) automáticamente.</p>
+            <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 text-left">
+              <p className="text-amber-800 text-xs font-semibold uppercase tracking-wider mb-2">Credenciales de primer acceso</p>
+              <p className="text-ink-secondary text-sm">RUT: <span className="font-mono font-bold">{form.rutEstudiante}</span></p>
+              <p className="text-ink-secondary text-sm">Contraseña temporal: <span className="font-mono font-bold text-amber-700">{claveGenerada}</span></p>
+              <p className="text-ink-muted text-xs mt-2">El estudiante deberá cambiar su contraseña al primer ingreso.</p>
+            </div>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
-            <p className="text-ink-muted text-xs mb-2">Esto creará una cuenta de login + un estudiante vinculado con sus 10 cuotas anuales.</p>
+            <p className="text-ink-muted text-xs">Crea la cuenta del estudiante. El login será con su RUT y una contraseña temporal de 4 dígitos.</p>
+
+            {/* ── Datos del estudiante (entidad principal) ─────────────────── */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre completo del estudiante</label>
+                <input required value={form.nombreEstudiante} onChange={(e) => handleChange('nombreEstudiante', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Sofía Fuentes Rojas" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">RUT del estudiante</label>
+                <input
+                  required
+                  value={form.rutEstudiante}
+                  onChange={(e) => handleChange('rutEstudiante', e.target.value)}
+                  className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                  placeholder="12.345.678-9"
+                />
+                {clavePreview.length >= 4 && (
+                  <p className="text-ink-muted text-xs mt-1">
+                    Clave temporal: <span className="font-mono font-bold text-ink-secondary">{clavePreview}</span>
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Curso</label>
+                <input required value={form.curso} onChange={(e) => handleChange('curso', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="7° Básico A" />
+              </div>
+            </div>
+
+            <hr className="border-surface-500" />
+
+            {/* ── Datos del apoderado (contacto, opcional) ─────────────────── */}
+            <p className="text-ink-muted text-xs font-semibold uppercase tracking-wide">Datos del apoderado (contacto)</p>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre apoderado</label>
-                <input required value={form.nombre} onChange={(e) => handleChange('nombre', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Carlos Fuentes" />
-              </div>
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">RUT</label>
-                <input required value={form.rut} onChange={(e) => handleChange('rut', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="12.345.678-9" />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Email (opcional)</label>
-                <input type="email" value={form.email} onChange={(e) => handleChange('email', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="correo@gmail.com" />
+                <input value={form.nombreApoderado} onChange={(e) => handleChange('nombreApoderado', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Carlos Fuentes (opc.)" />
               </div>
               <div>
                 <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Teléfono</label>
@@ -323,25 +364,12 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Contraseña</label>
-                <input required type="password" value={form.password} onChange={(e) => handleChange('password', e.target.value)} minLength={6} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Mín. 6 caracteres" />
-              </div>
+            <div>
+              <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Email de contacto (opcional)</label>
+              <input type="email" value={form.email} onChange={(e) => handleChange('email', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="correo@gmail.com" />
             </div>
 
             <hr className="border-surface-500" />
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre estudiante</label>
-                <input required value={form.nombreEstudiante} onChange={(e) => handleChange('nombreEstudiante', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Sofía Fuentes" />
-              </div>
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Curso</label>
-                <input required value={form.curso} onChange={(e) => handleChange('curso', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="7° Básico A" />
-              </div>
-            </div>
 
             {/* ── Beca / Arancel Diferenciado ─────────────────────────────── */}
             <div className={`rounded-xl border-2 transition-colors px-4 py-3 ${tieneBeca ? 'border-amber-300 bg-amber-50' : 'border-surface-400 bg-surface-700'}`}>
@@ -354,13 +382,13 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
                 </div>
                 <div>
                   <p className="text-ink-primary text-sm font-semibold">Beca / Arancel diferenciado</p>
-                  <p className="text-ink-muted text-xs">El valor estándar es {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(MONTO_BASE_CUOTA)}/mes</p>
+                  <p className="text-ink-muted text-xs">Valor estándar: {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(MONTO_BASE_CUOTA)}/mes</p>
                 </div>
               </label>
 
               {tieneBeca && (
                 <div className="mt-3">
-                  <label className="block text-amber-700 text-xs font-semibold mb-1 uppercase tracking-wide">Nuevo valor de cuota mensual ($)</label>
+                  <label className="block text-amber-700 text-xs font-semibold mb-1 uppercase tracking-wide">Valor de cuota mensual ($)</label>
                   <input
                     required={tieneBeca}
                     type="number"
@@ -372,7 +400,7 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
                   />
                   {montoBeca && !isNaN(parseInt(montoBeca)) && (
                     <p className="text-amber-700 text-xs mt-1">
-                      Se generarán 10 cuotas de {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca))} c/u · Total año: {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca) * 10)}
+                      10 cuotas de {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca))} · Total: {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca) * 10)}
                     </p>
                   )}
                 </div>
@@ -393,7 +421,7 @@ function ModalRegistrarApoderado({ onClose, onSuccess }) {
                     <span className="w-3.5 h-3.5 border-2 border-gray-900 border-t-transparent rounded-full animate-spin" />
                     Registrando...
                   </span>
-                ) : 'Registrar'}
+                ) : 'Registrar estudiante'}
               </button>
             </div>
           </form>
