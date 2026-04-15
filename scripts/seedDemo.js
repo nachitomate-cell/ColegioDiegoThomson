@@ -70,12 +70,17 @@ async function crearOActualizarUsuario(rut, password, nombre) {
   const email = rutAEmail(rut)
   try {
     const existing = await auth.getUserByEmail(email)
-    console.log(`  [ya existe] RUT: ${rut} → uid: ${existing.uid}`)
+    // Siempre actualizar la contraseña para mantener sincronía con el seed
+    await auth.updateUser(existing.uid, { password, displayName: nombre })
+    console.log(`  [actualizado] RUT: ${rut} → uid: ${existing.uid}`)
     return existing.uid
-  } catch {
-    const user = await auth.createUser({ email, password, displayName: nombre })
-    console.log(`  [creado]    RUT: ${rut} → uid: ${user.uid}`)
-    return user.uid
+  } catch (e) {
+    if (e.code === 'auth/user-not-found') {
+      const user = await auth.createUser({ email, password, displayName: nombre })
+      console.log(`  [creado]      RUT: ${rut} → uid: ${user.uid}`)
+      return user.uid
+    }
+    throw e
   }
 }
 
