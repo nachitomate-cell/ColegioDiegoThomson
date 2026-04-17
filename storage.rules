@@ -1,40 +1,21 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    
-    // Verifica si el usuario actual es un Administrador leyendo desde Firestore
-    function esAdmin() {
-      return request.auth != null && 
-        firestore.exists(/databases/(default)/documents/Admins/$(request.auth.uid));
-    }
-    
-    // Función auxiliar para verificar si la cuota pertenece al usuario
-    function perteneceAlUsuario(cuotaId) {
-      let cuotaRef = firestore.get(/databases/(default)/documents/Cuotas/$(cuotaId));
-      return cuotaRef != null && cuotaRef.data.estudiante_id == request.auth.uid;
-    }
-    
+
     match /comprobantes/{cuotaId}/{archivo} {
-      // 1. Escritura: 
-      // - Solo usuarios autenticados
-      // - Límite de 5 MB
-      // - Solo imágenes y PDF
-      // - Fuerza a que agreguen un metadato `subidoPor` con su UID real
-      // - La cuota debe pertenecer al estudiante auth.
+      // Escritura: usuario autenticado, archivo ≤ 5 MB, solo imagen o PDF,
+      // y el metadato subidoPor debe coincidir con el UID del usuario.
       allow write: if request.auth != null
                    && request.resource.size < 5 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*|application/pdf')
-                   && request.resource.metadata.subidoPor == request.auth.uid
-                   && perteneceAlUsuario(cuotaId);
-                   
-      // 2. Lectura:
-      // - Administradores pueden leer todo
-      // - El usuario que lo subió puede leerlo
-      allow read: if request.auth != null 
-                  && (esAdmin() || resource.metadata.subidoPor == request.auth.uid);
-                  
-      // No se permite borrar directamente desde el cliente, solo sobreescribir.
-      allow delete: if esAdmin();
+                   && request.resource.metadata.subidoPor == request.auth.uid;
+
+      // Lectura: cualquier usuario autenticado puede leer su propio comprobante.
+      allow read: if request.auth != null
+                  && resource.metadata.subidoPor == request.auth.uid;
+
+      // Borrado solo desde backend (Admin SDK), nunca desde el cliente.
+      allow delete: if false;
     }
   }
 }
