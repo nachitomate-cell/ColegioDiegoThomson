@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 import { adminDb }      from '../../../../firebase/adminConfig'
 import admin            from '../../../../firebase/adminConfig'
 
-const KHIPU_V3_URL = 'https://api.khipu.com/v3/payments'
+const KHIPU_V3_URL = 'https://payment-api.khipu.com/v3/payments'
 
 export async function POST(request) {
   try {
@@ -35,6 +35,9 @@ export async function POST(request) {
     }
 
     // ── Verificar pago con Khipu v3 ───────────────────────────────────────────
+    // Khipu v3 permite verificar por notification_token (query param) o por
+    // payment_id (path param: GET /v3/payments/{id}).
+    // Intentamos primero con notification_token; si falla usamos payment_id.
     const verifyRes = await fetch(
       `${KHIPU_V3_URL}?notification_token=${encodeURIComponent(notification_token)}`,
       {

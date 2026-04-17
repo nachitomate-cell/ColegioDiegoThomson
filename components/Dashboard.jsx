@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import Script from 'next/script'
 import { signOut }       from 'firebase/auth'
 import {
   collection, doc, getDocs, getDoc, query, updateDoc, where, serverTimestamp,
@@ -1080,9 +1081,10 @@ export default function Dashboard() {
     estudiante?.apoderado_rut_limpio ?? null
   )
 
-  const [modalCuota, setModalCuota]     = useState(null)
-  const [pagoEnProceso, setPagoEnProceso] = useState(null)
+  const [modalCuota, setModalCuota]         = useState(null)
+  const [pagoEnProceso, setPagoEnProceso]   = useState(null)
   const [modalPagarCuota, setModalPagarCuota] = useState(null)
+  const [khipuScriptListo, setKhipuScriptListo] = useState(false)
 
 
   const handlePagarSeleccion = (cuota) => {
@@ -1115,8 +1117,38 @@ export default function Dashboard() {
       }
 
       if (metodo === 'khipu') {
-        // Khipu devuelve un link directo (GET redirigible)
-        window.location.href = data.payment_url;
+        // Khipu: mostrar pago en modal usando la biblioteca JS oficial
+        if (!khipuScriptListo || typeof window.Khipu === 'undefined') {
+          alert('La biblioteca de Khipu aún está cargando. Espera un momento e intenta nuevamente.')
+          setPagoEnProceso(null)
+          return
+        }
+
+        const khipu = new window.Khipu()
+        khipu.startOperation(
+          data.payment_id,
+          (result) => {
+            console.log('[Khipu] callback:', result)
+            setPagoEnProceso(null)
+            if (result.result === 'ok') {
+              // Pago exitoso → refrescar cuotas
+              refreshCuotas()
+            }
+            // En cancel/error no hacemos nada; el modal ya se cerró solo
+          },
+          {
+            mountElement: document.getElementById('khenshin-web-root'),
+            modal: true,
+            modalOptions: { maxWidth: 450, maxHeight: 860 },
+            options: {
+              style: {
+                primaryColor: '#8347AD',
+                fontFamily:   'Roboto',
+              },
+              skipExitPage: false,
+            },
+          }
+        )
       } else {
         // Transbank requiere form POST
         const form = document.createElement('form')
@@ -1359,6 +1391,16 @@ export default function Dashboard() {
           onSelectMetodo={handleProcesarPago}
         />
       )}
+
+      {/* ── Khipu JS SDK ─────────────────────────────────────────────────────── */}
+      {/* El div es el punto de montaje del modal de Khipu */}
+      <div id="khenshin-web-root" />
+      <Script
+        src="https://js.khipu.com/v2/khenshin.js"
+        strategy="afterInteractive"
+        onLoad={() => setKhipuScriptListo(true)}
+      />
+
     </div>
   )
 }

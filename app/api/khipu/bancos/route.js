@@ -12,7 +12,7 @@ export async function GET() {
       return NextResponse.json({ error: 'KHIPU_SECRET no configurado' }, { status: 500 })
     }
 
-    const res = await fetch('https://api.khipu.com/v3/banks', {
+    const res = await fetch('https://payment-api.khipu.com/v3/banks', {
       method:  'GET',
       headers: { 'x-api-key': apiKey },
       // Next.js cache: revalida cada hora (los bancos no cambian seguido)

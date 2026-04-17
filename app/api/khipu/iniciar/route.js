@@ -11,7 +11,7 @@
 import { NextResponse } from 'next/server'
 import { adminDb }      from '../../../../firebase/adminConfig'
 
-const KHIPU_V3_URL = 'https://api.khipu.com/v3/payments'
+const KHIPU_V3_URL = 'https://payment-api.khipu.com/v3/payments'
 
 export async function POST(request) {
   try {
@@ -55,6 +55,10 @@ export async function POST(request) {
     }
 
     // ── Llamar API Khipu v3 ───────────────────────────────────────────────────
+    // notify_url solo se incluye si la URL es pública (no localhost).
+    // En desarrollo Khipu rechaza localhost con "Error de validación".
+    const esLocal = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')
+
     const body = {
       subject,
       currency:       'CLP',
@@ -62,7 +66,7 @@ export async function POST(request) {
       transaction_id: cuotaId,
       return_url:     `${baseUrl}/pago/resultado?success=true&khipu=true&cuotaId=${cuotaId}`,
       cancel_url:     `${baseUrl}/pago/resultado?success=false&motivo=cancelado&khipu=true`,
-      notify_url:     `${baseUrl}/api/khipu/confirmar`,
+      ...(!esLocal ? { notify_url: `${baseUrl}/api/khipu/confirmar` } : {}),
       // bank_id es opcional: si el apoderado ya eligió su banco en el portal,
       // Khipu salta la pantalla de selección de banco y va directo al pago.
       ...(bankId ? { bank_id: bankId } : {}),
