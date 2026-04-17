@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { updatePassword, onAuthStateChanged } from 'firebase/auth'
+import { updatePassword, onAuthStateChanged, signOut } from 'firebase/auth'
 import { doc, updateDoc } from 'firebase/firestore'
 import { auth, db } from '../../firebase/firebaseConfig'
 
@@ -16,6 +16,12 @@ function validarPassword(pw) {
   return null // válida
 }
 
+function validarEmail(email) {
+  if (!email.trim()) return 'El correo es obligatorio'
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Ingresa un correo válido'
+  return null
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function CambiarClavePage() {
@@ -24,6 +30,7 @@ export default function CambiarClavePage() {
   const [user, setUser]             = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
 
+  const [email, setEmail]           = useState('')
   const [nueva, setNueva]           = useState('')
   const [confirmar, setConfirmar]   = useState('')
   const [showNueva, setShowNueva]   = useState(false)
@@ -32,6 +39,7 @@ export default function CambiarClavePage() {
   const [error, setError]           = useState(null)
   const [success, setSuccess]       = useState(false)
   const [loading, setLoading]       = useState(false)
+  const [necesitaRelogin, setNecesitaRelogin] = useState(false)
 
   // ── Protección de ruta: si no hay sesión activa, volver al login ──────────
   useEffect(() => {
@@ -47,9 +55,11 @@ export default function CambiarClavePage() {
   }, [router])
 
   // ── Validaciones en tiempo real ───────────────────────────────────────────
-  const errorNueva      = nueva      ? validarPassword(nueva) : null
-  const errorConfirmar  = confirmar  ? (confirmar !== nueva ? 'Las contraseñas no coinciden' : null) : null
-  const formValido      = !errorNueva && !errorConfirmar && nueva.length > 0 && confirmar.length > 0
+  const errorEmail      = email     ? validarEmail(email) : null
+  const errorNueva      = nueva     ? validarPassword(nueva) : null
+  const errorConfirmar  = confirmar ? (confirmar !== nueva ? 'Las contraseñas no coinciden' : null) : null
+  const formValido      = !errorEmail && !errorNueva && !errorConfirmar &&
+                          email.trim().length > 0 && nueva.length > 0 && confirmar.length > 0
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -62,9 +72,10 @@ export default function CambiarClavePage() {
       // ── 1. Actualizar la credencial en Firebase Auth ──────────────────────
       await updatePassword(user, nueva)
 
-      // ── 2. Marcar como clave ya cambiada en Firestore ─────────────────────
+      // ── 2. Guardar email y marcar clave cambiada en Firestore ────────────
       await updateDoc(doc(db, 'Estudiantes', user.uid), {
         requiere_cambio_clave: false,
+        apoderado_email: email.trim().toLowerCase(),
       })
 
       // ── 3. Mostrar confirmación y redirigir ───────────────────────────────
@@ -74,7 +85,10 @@ export default function CambiarClavePage() {
     } catch (err) {
       switch (err.code) {
         case 'auth/requires-recent-login':
-          setError('Tu sesión expiró. Por favor cierra sesión, vuelve a ingresar y cambia tu clave.')
+          // Firebase exige re-autenticación para cambiar la contraseña
+          // si la sesión tiene más de unos minutos. Cerramos sesión y
+          // redirigimos al login con flag para que al ingresar vuelva aquí.
+          setNecesitaRelogin(true)
           break
         case 'auth/weak-password':
           setError('La contraseña es demasiado débil. Elige una más segura.')
@@ -90,11 +104,41 @@ export default function CambiarClavePage() {
     }
   }
 
+  // ── Re-login requerido por Firebase ──────────────────────────────────────
+  const handleRelogin = async () => {
+    await signOut(auth)
+    router.replace('/login?reauth=1')
+  }
+
   // ── Estado de carga inicial (esperando sesión) ────────────────────────────
   if (authLoading) {
     return (
       <div className="min-h-screen bg-surface-900 flex items-center justify-center">
         <span className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  // ── Pantalla de re-login ──────────────────────────────────────────────────
+  if (necesitaRelogin) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center p-4">
+        <div className="bg-surface-700 border border-surface-500 rounded-2xl shadow-card-lg w-full max-w-sm p-8 text-center space-y-4 animate-fade-in">
+          <div className="w-12 h-12 rounded-full bg-pending-bg border border-pending-border flex items-center justify-center mx-auto">
+            <span className="text-pending text-xl">↩</span>
+          </div>
+          <p className="text-ink-primary font-semibold">Tu sesión necesita renovarse</p>
+          <p className="text-ink-muted text-sm leading-relaxed">
+            Por seguridad, Firebase requiere que ingreses nuevamente antes de cambiar tu contraseña.
+            Haz clic abajo — serás redirigido automáticamente a este formulario.
+          </p>
+          <button
+            onClick={handleRelogin}
+            className="w-full bg-accent hover:bg-accent-hover text-gray-900 font-semibold py-2.5 rounded-lg transition-all shadow-glow-blue active:scale-[0.98]"
+          >
+            Volver a ingresar
+          </button>
+        </div>
       </div>
     )
   }
@@ -118,15 +162,36 @@ export default function CambiarClavePage() {
         {/* Banner informativo */}
         <div className="bg-accent/10 border border-accent-border rounded-xl px-4 py-3 mb-6">
           <p className="text-ink-secondary text-sm font-semibold leading-snug">
-            Por tu seguridad, debes crear una nueva contraseña personal.
+            Por tu seguridad, crea una contraseña personal e ingresa tu correo.
           </p>
           <p className="text-ink-muted text-xs mt-1">
-            Mínimo {MIN_LENGTH} caracteres, una mayúscula y un número.
+            Tu correo se usará para enviarte comprobantes de pago.
           </p>
         </div>
 
         {/* Formulario */}
         <form onSubmit={handleSubmit} className="space-y-4">
+
+          {/* Correo electrónico */}
+          <div>
+            <label className="block text-ink-muted text-xs font-semibold mb-1.5 uppercase tracking-wide">
+              Correo electrónico <span className="text-overdue normal-case">*</span>
+            </label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(null) }}
+              className={`w-full bg-white border-2 rounded-lg px-3 py-2.5 text-ink-primary text-sm focus:outline-none transition-all placeholder:text-ink-disabled
+                ${email && !errorEmail ? 'border-paid focus:border-paid focus:ring-2 focus:ring-paid/20' : ''}
+                ${errorEmail          ? 'border-overdue focus:border-overdue focus:ring-2 focus:ring-overdue/20' : ''}
+                ${!email              ? 'border-surface-400 focus:border-accent focus:ring-2 focus:ring-accent/20' : ''}
+              `}
+              placeholder="apoderado@correo.com"
+            />
+            {errorEmail && <p className="text-overdue text-xs mt-1">{errorEmail}</p>}
+            {email && !errorEmail && <p className="text-paid text-xs mt-1">Correo válido ✓</p>}
+          </div>
 
           {/* Nueva contraseña */}
           <div>
@@ -205,7 +270,7 @@ export default function CambiarClavePage() {
           {/* Éxito */}
           {success && (
             <div className="text-paid text-xs bg-paid-bg border border-paid-border rounded-lg px-3 py-2.5 leading-relaxed">
-              Contraseña actualizada. Redirigiendo al panel...
+              Contraseña actualizada. Tu correo <span className="font-semibold">{email}</span> quedó registrado. Redirigiendo...
             </div>
           )}
 

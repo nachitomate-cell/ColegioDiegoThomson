@@ -2,57 +2,193 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Admin: acepta Custom Claim (sin latencia extra) O presencia en /Admins
+    // (compatibilidad con la implementación actual mientras se migra a Claims).
     function esAdmin() {
-      return request.auth != null &&
-        exists(/databases/$(database)/documents/Admins/$(request.auth.uid));
+      return request.auth != null && (
+        request.auth.token.role == 'admin' ||
+        exists(/databases/$(database)/documents/Admins/$(request.auth.uid))
+      );
     }
 
+    // Secretaria: solo vía Custom Claim. Asignar con Admin SDK:
+    //   adminAuth.setCustomUserClaims(uid, { role: 'secretaria' })
+    function esSecretaria() {
+      return request.auth != null &&
+        request.auth.token.role == 'secretaria';
+    }
+
+    // Cualquier miembro del personal autorizado del colegio
+    function esPersonal() {
+      return esAdmin() || esSecretaria();
+    }
+
+    // El propio estudiante autenticado (doc ID == Firebase Auth UID)
     function esElEstudiante(estudianteId) {
       return request.auth != null && request.auth.uid == estudianteId;
     }
 
-    // ── Admins ─────────────────────────────────────────────────────────────────
-    match /Admins/{uid} {
-      allow read:  if request.auth != null && request.auth.uid == uid;
-      allow write: if false;
+    // Valida estructura mínima de una Cuota antes de persistirla.
+    // Rama en es_voluntaria: las cuotas CGPA no tienen estudiante_id ni mes.
+    function cuotaValida() {
+      let d = request.resource.data;
+      if (d.get('es_voluntaria', false) == true) {
+        return d.keys().hasAll(['concepto', 'monto', 'es_voluntaria', 'estado', 'apoderado_id'])
+            && d.monto is number && d.monto > 0
+            && d.apoderado_id is string && d.apoderado_id.size() > 0
+            && d.estado in ['pendiente', 'en_revision', 'pagado'];
+      }
+      return d.keys().hasAll(['estudiante_id', 'mes', 'anio', 'monto', 'estado'])
+          && d.monto is number && d.monto > 0
+          && d.estudiante_id is string && d.estudiante_id.size() > 0
+          && d.estado in ['pendiente', 'atrasado', 'en_revision', 'pagado'];
     }
 
-    // ── Estudiantes ────────────────────────────────────────────────────────────
-    // El doc ID == Firebase Auth UID del estudiante.
-    // El estudiante puede leer y actualizar su propio doc (p.ej. quitar requiere_cambio_clave).
+    // ════════════════════════════════════════════════════════════════════════
+    // REGLA BASE: denegación total por defecto
+    // Todo lo que no esté explícitamente permitido debajo queda bloqueado.
+    // ════════════════════════════════════════════════════════════════════════
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ADMINS
+    // Solo el propio admin puede leer su doc (para el check de rol en el login).
+    // Escritura reservada exclusivamente al Admin SDK / Firebase Console.
+    // ════════════════════════════════════════════════════════════════════════
+    match /Admins/{uid} {
+      allow read:             if request.auth != null && request.auth.uid == uid;
+      allow create, update,
+            delete:           if false;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ESTUDIANTES
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Un apoderado puede leer los docs de sus hijos (mismo apoderado_rut_limpio).
+    // Permite construir el selector de hijo sin exponer datos de otros apoderados.
+    function esHermano(estudianteId) {
+      return request.auth != null
+          && exists(/databases/$(database)/documents/Estudiantes/$(request.auth.uid))
+          && resource.data.apoderado_rut_limpio != null
+          && resource.data.apoderado_rut_limpio ==
+             get(/databases/$(database)/documents/Estudiantes/$(request.auth.uid)).data.apoderado_rut_limpio;
+    }
+
     match /Estudiantes/{estudianteId} {
-      allow read:   if esElEstudiante(estudianteId) || esAdmin();
-      allow create: if esAdmin();
-      allow update: if esAdmin() ||
+      // Lectura: el propio alumno, sus hermanos (mismo apoderado) o personal
+      allow read:   if esElEstudiante(estudianteId) || esHermano(estudianteId) || esPersonal();
+
+      // Creación: solo personal (formulario de matrícula)
+      allow create: if esPersonal();
+
+      // Actualización:
+      //   • Personal puede modificar cualquier campo
+      //   • El propio estudiante solo puede tocar los campos del primer login
+      //     (cambio de clave + registro de email de contacto)
+      allow update: if esPersonal() ||
                       (esElEstudiante(estudianteId) &&
                        request.resource.data.diff(resource.data)
-                         .affectedKeys().hasOnly(['requiere_cambio_clave']));
+                         .affectedKeys()
+                         .hasOnly(['requiere_cambio_clave', 'apoderado_email']));
+
+      // Borrado deshabilitado — solo Admin SDK puede eliminar estudiantes
       allow delete: if false;
     }
 
-    // ── Cuotas ─────────────────────────────────────────────────────────────────
-    // El campo estudiante_id == Firebase Auth UID del estudiante.
+    // ════════════════════════════════════════════════════════════════════════
+    // CUOTAS
+    // ════════════════════════════════════════════════════════════════════════
     match /Cuotas/{cuotaId} {
-      allow read:   if esAdmin() ||
-                      (request.auth != null &&
-                       resource.data.estudiante_id == request.auth.uid);
+      // Cuota obligatoria de un hermano del mismo apoderado
+      function esCuotaDelGrupo() {
+        return request.auth != null
+            && exists(/databases/$(database)/documents/Estudiantes/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/Estudiantes/$(resource.data.estudiante_id))
+            && get(/databases/$(database)/documents/Estudiantes/$(resource.data.estudiante_id)).data.apoderado_rut_limpio != null
+            && get(/databases/$(database)/documents/Estudiantes/$(resource.data.estudiante_id)).data.apoderado_rut_limpio ==
+               get(/databases/$(database)/documents/Estudiantes/$(request.auth.uid)).data.apoderado_rut_limpio;
+      }
 
-      allow update: if esAdmin() ||
+      // Cuota voluntaria (CGPA) cuyo apoderado_id coincide con el apoderado del alumno logueado
+      function esCuotaVoluntariaDelApoderado() {
+        return request.auth != null
+            && resource.data.get('es_voluntaria', false) == true
+            && exists(/databases/$(database)/documents/Estudiantes/$(request.auth.uid))
+            && resource.data.apoderado_id ==
+               get(/databases/$(database)/documents/Estudiantes/$(request.auth.uid)).data.apoderado_rut_limpio;
+      }
+
+      allow read:   if esPersonal() ||
+                      (request.auth != null &&
+                       resource.data.estudiante_id == request.auth.uid) ||
+                      esCuotaDelGrupo() ||
+                      esCuotaVoluntariaDelApoderado();
+
+      // Creación: solo personal, y el documento debe ser válido
+      allow create: if esPersonal() && cuotaValida();
+
+      // Actualización:
+      //   • Personal puede aprobar/rechazar cualquier cuota
+      //   • El estudiante SOLO puede subir comprobante (pendiente/atrasado → en_revision)
+      //   • El apoderado puede subir comprobante de su cuota voluntaria (pendiente → en_revision)
+      allow update: if esPersonal() ||
                       (request.auth != null &&
                        resource.data.estudiante_id == request.auth.uid &&
+                       resource.data.estado in ['pendiente', 'atrasado'] &&
                        request.resource.data.estado == 'en_revision' &&
                        request.resource.data.diff(resource.data)
-                         .affectedKeys().hasOnly(['estado', 'comprobante_url', 'fecha_envio']));
+                         .affectedKeys()
+                         .hasOnly(['estado', 'comprobante_url', 'fecha_envio'])) ||
+                      (esCuotaVoluntariaDelApoderado() &&
+                       resource.data.estado == 'pendiente' &&
+                       request.resource.data.estado == 'en_revision' &&
+                       request.resource.data.diff(resource.data)
+                         .affectedKeys()
+                         .hasOnly(['estado', 'comprobante_url', 'fecha_envio']));
 
-      allow create: if esAdmin();
+      // Borrado deshabilitado
       allow delete: if false;
     }
 
-    // ── Apoderados (colección legada, solo admin) ──────────────────────────────
-    match /Apoderados/{uid} {
+    // ════════════════════════════════════════════════════════════════════════
+    // APODERADOS
+    // Colección auxiliar indexada por RUT (sin autenticación propia).
+    // Solo el personal puede leer/escribir.
+    // ════════════════════════════════════════════════════════════════════════
+    match /Apoderados/{apoderadoId} {
+      allow read:          if esPersonal();
+      allow create, update: if esPersonal();
+      allow delete:         if false;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN
+    // Documentos de configuración global del sistema (ej: periodo_escolar).
+    // Lectura: cualquier usuario autenticado (apoderados necesitan leerlo).
+    // Escritura: solo personal (admin / secretaria).
+    // ════════════════════════════════════════════════════════════════════════
+    match /configuracion/{docId} {
+      allow read:  if request.auth != null;
+      allow write: if esPersonal();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // LOGS
+    // Cualquier usuario autenticado puede crear entradas (auditoría de acciones).
+    // Solo el admin puede consultarlos. Inmutables una vez creados.
+    // ════════════════════════════════════════════════════════════════════════
+    match /Logs/{logId} {
       allow read:   if esAdmin();
-      allow write:  if esAdmin();
+      allow create: if request.auth != null;
+      allow update,
+            delete: if false;
     }
   }
 }

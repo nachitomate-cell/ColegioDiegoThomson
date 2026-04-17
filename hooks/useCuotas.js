@@ -46,16 +46,18 @@ export function useCuotas(estudianteId) {
         const data = snapshot.docs.map((docSnap) => {
           const d = docSnap.data()
           return {
-            id:              docSnap.id,
-            estudianteId:    d.estudiante_id,
-            mes:             d.mes,
-            anio:            d.anio,
-            monto:           d.monto,
-            fechaVencimiento: d.fecha_vencimiento?.toDate() ?? null,
-            fechaPago:        d.fecha_pago?.toDate() ?? null,
-            estado:          d.estado,
-            comprobanteUrl:  d.comprobante_url ?? null,
-            createdAt:       d.created_at?.toDate() ?? null,
+            id:                  docSnap.id,
+            estudianteId:        d.estudiante_id,
+            mes:                 d.mes,
+            anio:                d.anio,
+            monto:               d.monto,
+            fechaVencimiento:    d.fecha_vencimiento?.toDate() ?? null,
+            fechaPago:           d.fecha_pago?.toDate()        ?? null,
+            fechaEnvio:          d.fecha_envio?.toDate()       ?? null,
+            estado:              d.estado,
+            comprobanteUrl:      d.comprobante_url             ?? null,
+            transbank_auth_code: d.transbank_auth_code         ?? null,
+            createdAt:           d.created_at?.toDate()        ?? null,
           }
         })
 

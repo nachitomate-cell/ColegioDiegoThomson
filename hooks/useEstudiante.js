@@ -42,13 +42,17 @@ export function useEstudiante(uid) {
 
         if (!cancelled) {
           setEstudiante({
-            nombre:           data.nombre,
-            rut:              data.rut,
-            curso:            data.curso,
-            apoderado_nombre: data.apoderado_nombre ?? null,
-            apoderado_rut:    data.apoderado_rut    ?? null,
-            beca:             data.beca             ?? false,
-            monto_cuota:      data.monto_cuota      ?? null,
+            nombre:               data.nombre,
+            rut:                  data.rut,
+            rut_limpio:           data.rut_limpio           ?? null,
+            curso:                data.curso,
+            apoderado_nombre:     data.apoderado_nombre     ?? null,
+            apoderado_rut:        data.apoderado_rut        ?? null,
+            apoderado_rut_limpio: data.apoderado_rut_limpio ?? null,
+            apoderado_email:      data.apoderado_email      ?? null,
+            beca:                 data.beca                 ?? false,
+            es_becado:            data.es_becado            ?? false,
+            monto_cuota:          data.monto_cuota          ?? null,
           })
         }
       } catch (err) {

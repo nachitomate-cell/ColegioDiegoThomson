@@ -20,3 +20,18 @@ Thumbs.db
 
 .vercel
 .env*.local
+
+# PWA - archivos generados automáticamente en cada build
+public/sw.js
+public/workbox-*.js
+public/worker-*.js
+public/sw.js.map
+public/workbox-*.js.map
+Public/swe-worker-*.js
+
+# Datos sensibles / archivos locales
+estudiantes.xlsx
+migracion-errores.json
+
+# Carpetas accidentales
+Public/Public/

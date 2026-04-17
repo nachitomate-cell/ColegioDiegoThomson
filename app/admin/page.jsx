@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   collection, query, where, onSnapshot, getDocs, addDoc,
-  doc, updateDoc, getDoc, serverTimestamp, Timestamp,
+  doc, updateDoc, getDoc, setDoc, serverTimestamp, Timestamp, writeBatch,
 } from 'firebase/firestore'
 import { signOut, createUserWithEmailAndPassword } from 'firebase/auth'
 import { useRouter } from 'next/navigation'
@@ -11,6 +11,8 @@ import { db, auth } from '../../firebase/firebaseConfig'
 import { useAuth }   from '../../hooks/useAuth'
 import { exportarCuotasExcel, exportarApoderadosExcel } from '../../lib/exportarExcel'
 import { LOGO_SRC } from '../../lib/logo'
+import { normalizar } from '../../lib/utils'
+import ModalRegistrarEstudiante from '../../components/StudentRegistrationForm'
 
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -33,7 +35,7 @@ const formatHora = (date) => {
 }
 
 // ── Valor base mensual (fácil de cambiar) ─────────────────────────────────────
-const MONTO_BASE_CUOTA = 87_000
+const MONTO_BASE_CUOTA = 97_500
 
 const MESES = [
   'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto',
@@ -48,11 +50,19 @@ const estadoLabel = {
 }
 
 const estadoColor = {
-  pendiente:   'bg-pending-bg text-pending border-pending-border',
-  atrasado:    'bg-overdue-bg text-overdue border-overdue-border',
-  en_revision: 'bg-review-bg text-review border-review-border',
-  pagado:      'bg-paid-bg text-paid border-paid-border',
+  pendiente:   'bg-orange-100 text-orange-800',
+  atrasado:    'bg-red-600 text-white font-bold',
+  en_revision: 'bg-blue-100 text-blue-700',
+  pagado:      'bg-green-600 text-white',
 }
+
+const ITEMS_PER_PAGE = 50
+
+const CURSOS = [
+  'Kinder',
+  '1° Básico', '2° Básico', '3° Básico', '4° Básico',
+  '5° Básico', '6° Básico', '7° Básico', '8° Básico',
+]
 
 
 // ─── SKELETON ─────────────────────────────────────────────────────────────────
@@ -82,7 +92,7 @@ function StatCard({ label, value, color = 'text-ink-primary', icon, subtext }) {
 
 function EstadoBadge({ estado }) {
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${estadoColor[estado] ?? ''}`}>
+    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${estadoColor[estado] ?? 'bg-gray-100 text-gray-600'}`}>
       {estadoLabel[estado] ?? estado}
     </span>
   )
@@ -181,256 +191,6 @@ function ModalComprobante({ url, onClose }) {
 }
 
 
-// ─── MODAL REGISTRAR ESTUDIANTE ───────────────────────────────────────────────
-
-function ModalRegistrarApoderado({ onClose, onSuccess }) {
-  const [form, setForm] = useState({
-    nombreEstudiante: '',
-    rutEstudiante:    '',
-    curso:            '',
-    nombreApoderado:  '',
-    email:            '',
-    telefono:         '',
-  })
-  const [tieneBeca, setTieneBeca] = useState(false)
-  const [montoBeca, setMontoBeca] = useState('')
-  const [guardando, setGuardando] = useState(false)
-  const [error, setError]         = useState(null)
-  const [exito, setExito]         = useState(false)
-  const [claveGenerada, setClaveGenerada] = useState('')
-
-  const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }))
-
-  // Derivar contraseña inicial: primeros 6 dígitos del RUT del estudiante
-  // (Firebase Auth exige mínimo 6 caracteres en el client SDK)
-  const calcularClave = (rut) => {
-    const soloDigitos = rut.replace(/[^0-9]/g, '')
-    return soloDigitos.slice(0, 6) || ''
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setGuardando(true)
-    setError(null)
-
-    try {
-      // Validar monto beca si aplica
-      const montoFinal = tieneBeca ? parseInt(montoBeca, 10) : MONTO_BASE_CUOTA
-      if (tieneBeca && (isNaN(montoFinal) || montoFinal <= 0)) {
-        setError('Ingresa un valor de cuota válido para la beca.')
-        setGuardando(false)
-        return
-      }
-
-      // Contraseña inicial = primeros 4 dígitos del RUT del estudiante
-      const clave = calcularClave(form.rutEstudiante)
-      if (clave.length < 6) {
-        setError('El RUT del estudiante debe tener al menos 6 dígitos para generar la contraseña.')
-        setGuardando(false)
-        return
-      }
-
-      // 1. Crear cuenta Firebase Auth con RUT del estudiante
-      // Formato email interno: "12345678-9@portal.cdt"
-      const rutLimpio    = form.rutEstudiante.replace(/\./g, '').trim().toLowerCase()
-      const emailInterno = `${rutLimpio}@portal.cdt`
-
-      const { user: nuevoUser } = await createUserWithEmailAndPassword(auth, emailInterno, clave)
-      const uid = nuevoUser.uid
-
-      // 2. Crear doc Estudiantes/{uid} — el uid ES el doc ID
-      await import('firebase/firestore').then(({ setDoc }) =>
-        setDoc(doc(db, 'Estudiantes', uid), {
-          nombre:            form.nombreEstudiante,
-          rut:               form.rutEstudiante,
-          curso:             form.curso,
-          apoderado_nombre:  form.nombreApoderado || null,
-          apoderado_rut:     null,
-          email:             form.email     || null,
-          telefono:          form.telefono  || null,
-          beca:              tieneBeca,
-          monto_cuota:       montoFinal,
-          requiere_cambio_clave: true,
-          created_at:        serverTimestamp(),
-        })
-      )
-
-      // 3. Generar las 10 cuotas Marzo–Diciembre
-      // El estudiante_id de las cuotas = uid (= Estudiantes doc ID)
-      const anio = new Date().getFullYear()
-      for (let i = 0; i < MESES.length; i++) {
-        const mesIdx = i + 2 // Marzo = índice 2 (0-based), Diciembre = 11
-        await addDoc(collection(db, 'Cuotas'), {
-          estudiante_id:     uid,
-          mes:               MESES[i],
-          anio:              anio,
-          monto:             montoFinal,
-          estado:            'pendiente',
-          fecha_vencimiento: Timestamp.fromDate(new Date(anio, mesIdx, 5)),
-          comprobante_url:   null,
-          fecha_envio:       null,
-          fecha_pago:        null,
-          created_at:        serverTimestamp(),
-        })
-      }
-
-      setClaveGenerada(clave)
-      setExito(true)
-      setTimeout(() => { onSuccess?.(); onClose() }, 4000)
-
-    } catch (err) {
-      console.error('[ModalRegistrar] Error:', err)
-      if (err.code === 'auth/email-already-in-use') {
-        setError('Ya existe una cuenta registrada con ese RUT de estudiante.')
-      } else {
-        setError(err.message)
-      }
-    } finally {
-      setGuardando(false)
-    }
-  }
-
-  // Preview de la clave mientras el admin escribe el RUT
-  const clavePreview = calcularClave(form.rutEstudiante)
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={(e) => e.target === e.currentTarget && !guardando && onClose()}>
-      <div className="bg-white border border-surface-400 rounded-2xl shadow-card-lg w-full max-w-md max-h-[90vh] overflow-y-auto animate-slide-up">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-500 sticky top-0 bg-white z-10">
-          <h2 className="text-ink-primary font-semibold text-base">Registrar nuevo estudiante</h2>
-          <button onClick={onClose} disabled={guardando} className="text-ink-muted hover:text-ink-primary text-xl leading-none">×</button>
-        </div>
-
-        {exito ? (
-          <div className="px-6 py-10 text-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-paid-bg border-2 border-paid flex items-center justify-center mx-auto">
-              <svg className="w-8 h-8 text-paid" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-            </div>
-            <p className="text-ink-primary font-semibold">¡Estudiante registrado!</p>
-            <p className="text-ink-muted text-sm">Se crearon las 10 cuotas (Marzo–Diciembre) automáticamente.</p>
-            <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 text-left">
-              <p className="text-amber-800 text-xs font-semibold uppercase tracking-wider mb-2">Credenciales de primer acceso</p>
-              <p className="text-ink-secondary text-sm">RUT: <span className="font-mono font-bold">{form.rutEstudiante}</span></p>
-              <p className="text-ink-secondary text-sm">Contraseña temporal: <span className="font-mono font-bold text-amber-700">{claveGenerada}</span></p>
-              <p className="text-ink-muted text-xs mt-2">El estudiante deberá cambiar su contraseña al primer ingreso.</p>
-            </div>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
-            <p className="text-ink-muted text-xs">Crea la cuenta del estudiante. El login será con su RUT y una contraseña temporal de 4 dígitos.</p>
-
-            {/* ── Datos del estudiante (entidad principal) ─────────────────── */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre completo del estudiante</label>
-                <input required value={form.nombreEstudiante} onChange={(e) => handleChange('nombreEstudiante', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Sofía Fuentes Rojas" />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">RUT del estudiante</label>
-                <input
-                  required
-                  value={form.rutEstudiante}
-                  onChange={(e) => handleChange('rutEstudiante', e.target.value)}
-                  className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                  placeholder="12.345.678-9"
-                />
-                {clavePreview.length >= 6 && (
-                  <p className="text-ink-muted text-xs mt-1">
-                    Clave temporal: <span className="font-mono font-bold text-ink-secondary">{clavePreview}</span>
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Curso</label>
-                <input required value={form.curso} onChange={(e) => handleChange('curso', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="7° Básico A" />
-              </div>
-            </div>
-
-            <hr className="border-surface-500" />
-
-            {/* ── Datos del apoderado (contacto, opcional) ─────────────────── */}
-            <p className="text-ink-muted text-xs font-semibold uppercase tracking-wide">Datos del apoderado (contacto)</p>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre apoderado</label>
-                <input value={form.nombreApoderado} onChange={(e) => handleChange('nombreApoderado', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="Carlos Fuentes (opc.)" />
-              </div>
-              <div>
-                <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Teléfono</label>
-                <input value={form.telefono} onChange={(e) => handleChange('telefono', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="+56 9 1234 5678" />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Email de contacto (opcional)</label>
-              <input type="email" value={form.email} onChange={(e) => handleChange('email', e.target.value)} className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" placeholder="correo@gmail.com" />
-            </div>
-
-            <hr className="border-surface-500" />
-
-            {/* ── Beca / Arancel Diferenciado ─────────────────────────────── */}
-            <div className={`rounded-xl border-2 transition-colors px-4 py-3 ${tieneBeca ? 'border-amber-300 bg-amber-50' : 'border-surface-400 bg-surface-700'}`}>
-              <label className="flex items-center gap-3 cursor-pointer select-none">
-                <div
-                  onClick={() => { setTieneBeca(v => !v); setMontoBeca('') }}
-                  className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${tieneBeca ? 'bg-amber-400' : 'bg-surface-400'}`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${tieneBeca ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                </div>
-                <div>
-                  <p className="text-ink-primary text-sm font-semibold">Beca / Arancel diferenciado</p>
-                  <p className="text-ink-muted text-xs">Valor estándar: {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(MONTO_BASE_CUOTA)}/mes</p>
-                </div>
-              </label>
-
-              {tieneBeca && (
-                <div className="mt-3">
-                  <label className="block text-amber-700 text-xs font-semibold mb-1 uppercase tracking-wide">Valor de cuota mensual ($)</label>
-                  <input
-                    required={tieneBeca}
-                    type="number"
-                    min={1}
-                    value={montoBeca}
-                    onChange={(e) => setMontoBeca(e.target.value)}
-                    className="w-full bg-white border-2 border-amber-300 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200 transition-all"
-                    placeholder="Ej: 50000"
-                  />
-                  {montoBeca && !isNaN(parseInt(montoBeca)) && (
-                    <p className="text-amber-700 text-xs mt-1">
-                      10 cuotas de {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca))} · Total: {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(parseInt(montoBeca) * 10)}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {error && (
-              <div className="text-overdue text-xs bg-overdue-bg border border-overdue-border rounded-lg px-3 py-2">{error}</div>
-            )}
-
-            <div className="flex gap-3 pt-2">
-              <button type="button" onClick={onClose} disabled={guardando} className="flex-1 py-2.5 rounded-lg text-sm font-medium text-ink-secondary bg-surface-600 hover:bg-surface-500 border border-surface-400 transition-colors">
-                Cancelar
-              </button>
-              <button type="submit" disabled={guardando} className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-gray-900 bg-accent hover:bg-accent-hover disabled:opacity-50 transition-all">
-                {guardando ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <span className="w-3.5 h-3.5 border-2 border-gray-900 border-t-transparent rounded-full animate-spin" />
-                    Registrando...
-                  </span>
-                ) : 'Registrar estudiante'}
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-    </div>
-  )
-}
 
 
 // ─── FILA DE CUOTA (REVISIÓN) ─────────────────────────────────────────────────
@@ -488,6 +248,360 @@ function FilaCuotaRevision({ cuota, nombreEstudiante, onVerComprobante, onAproba
 }
 
 
+// ─── SECCIÓN CONFIGURACIÓN ────────────────────────────────────────────────────
+
+function SeccionConfiguracion() {
+  const [config,             setConfig]             = useState(null)
+  const [loadingConfig,      setLoadingConfig]      = useState(true)
+  const [confirmandoActivar, setConfirmandoActivar] = useState(false)
+  const [guardando,          setGuardando]          = useState(false)
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, 'configuracion', 'periodo_escolar'),
+      (snap) => {
+        setConfig(snap.exists() ? snap.data() : { admite_matricula_2027: false })
+        setLoadingConfig(false)
+      },
+      (err) => { console.error('[SeccionConfiguracion]', err); setLoadingConfig(false) }
+    )
+    return () => unsub()
+  }, [])
+
+  const aplicarToggle = async (activar) => {
+    setConfirmandoActivar(false)
+    setGuardando(true)
+    try {
+      await setDoc(
+        doc(db, 'configuracion', 'periodo_escolar'),
+        { admite_matricula_2027: activar },
+        { merge: true }
+      )
+    } catch (err) {
+      console.error('[SeccionConfiguracion] Error al guardar:', err)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  const handleToggle = (nuevoValor) => {
+    // Activar requiere confirmación; desactivar es inmediato
+    if (nuevoValor) { setConfirmandoActivar(true); return }
+    aplicarToggle(false)
+  }
+
+  const activo = config?.admite_matricula_2027 ?? false
+
+  return (
+    <div className="space-y-5 max-w-xl">
+
+      {/* ── Header ── */}
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
+          <svg className="w-5 h-5 text-accent-hover" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.397.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-ink-primary font-semibold text-base">Control de Período Escolar</h3>
+          <p className="text-ink-muted text-xs">Administra la visibilidad de procesos para apoderados</p>
+        </div>
+      </div>
+
+      {/* ── Toggle: Matrícula 2027 ── */}
+      <div className={`rounded-xl border-2 px-5 py-4 flex items-center justify-between gap-4 transition-colors duration-300
+        ${activo ? 'border-accent/40 bg-accent/5' : 'border-surface-400 bg-surface-700'}`}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-ink-primary text-sm font-semibold">Matrícula 2027</p>
+            {!loadingConfig && (
+              <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full
+                ${activo
+                  ? 'bg-paid-bg text-paid border border-paid-border'
+                  : 'bg-surface-600 text-ink-muted border border-surface-400'
+                }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${activo ? 'bg-paid animate-pulse' : 'bg-ink-disabled'}`} />
+                {activo ? 'Activo' : 'Inactivo'}
+              </span>
+            )}
+          </div>
+          <p className="text-ink-muted text-xs mt-1">
+            {activo
+              ? 'El proceso de matrícula 2027 es visible para todos los apoderados.'
+              : 'Oculto — los apoderados no verán la sección de matrícula 2027.'}
+          </p>
+        </div>
+
+        {/* Toggle switch */}
+        {loadingConfig ? (
+          <Sk className="w-12 h-6 rounded-full flex-shrink-0" />
+        ) : (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={activo}
+            onClick={() => handleToggle(!activo)}
+            disabled={guardando}
+            title={activo ? 'Desactivar matrícula 2027' : 'Activar matrícula 2027'}
+            className={`relative w-12 h-6 rounded-full transition-colors duration-200 flex-shrink-0 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface-700
+              ${activo ? 'bg-accent' : 'bg-surface-400'}`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200
+              ${activo ? 'translate-x-6' : 'translate-x-0'}`}
+            />
+          </button>
+        )}
+      </div>
+
+      {/* ── Diálogo de confirmación ── */}
+      {confirmandoActivar && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 space-y-3 animate-fade-in">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-amber-100 border border-amber-300 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <p className="text-amber-800 text-sm font-semibold">Confirmar habilitación</p>
+              <p className="text-amber-700 text-xs mt-1 leading-relaxed">
+                ¿Está segura de habilitar el cobro de matrícula 2027 para todos los apoderados?
+                Esta acción será visible de <span className="font-semibold">inmediato</span> en el portal de cada familia.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 pl-11">
+            <button
+              onClick={() => aplicarToggle(true)}
+              disabled={guardando}
+              className="flex-1 py-2 rounded-lg text-xs font-semibold text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors"
+            >
+              {guardando ? 'Habilitando...' : 'Sí, habilitar ahora'}
+            </button>
+            <button
+              onClick={() => setConfirmandoActivar(false)}
+              className="flex-1 py-2 rounded-lg text-xs font-medium text-amber-700 bg-white hover:bg-amber-50 border border-amber-200 transition-colors"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Nota informativa ── */}
+      <p className="text-ink-disabled text-xs">
+        Los cambios se propagan en tiempo real. No requieren reiniciar el sistema.
+      </p>
+    </div>
+  )
+}
+
+
+// ─── MODAL EDITAR ESTUDIANTE ──────────────────────────────────────────────────
+
+function ModalEditarEstudiante({ estudiante, onClose, onSaved }) {
+  const [nombre,          setNombre]          = useState(estudiante.nombre          ?? '')
+  const [curso,           setCurso]           = useState(estudiante.curso           ?? '')
+  const [apoderadoNombre, setApoderadoNombre] = useState(estudiante.apoderado_nombre ?? '')
+  const [apoderadoEmail,  setApoderadoEmail]  = useState(estudiante.apoderado_email ?? estudiante.email ?? '')
+  const [telefono,        setTelefono]        = useState(estudiante.telefono        ?? '')
+  const [esBecado,        setEsBecado]        = useState(estudiante.es_becado       ?? false)
+  const [montoCuota,      setMontoCuota]      = useState(String(estudiante.monto_cuota ?? MONTO_BASE_CUOTA))
+  const [guardando,       setGuardando]       = useState(false)
+  const [error,           setError]           = useState(null)
+
+  const handleGuardar = async () => {
+    if (!nombre.trim())  { setError('El nombre es requerido'); return }
+    if (!curso)          { setError('El curso es requerido'); return }
+    if (esBecado) {
+      const m = parseInt(montoCuota, 10)
+      if (isNaN(m) || m <= 0 || m >= MONTO_BASE_CUOTA) {
+        setError(`El monto debe ser un valor válido menor a ${formatCLP(MONTO_BASE_CUOTA)}`)
+        return
+      }
+    }
+    setGuardando(true)
+    setError(null)
+    try {
+      const montoFinal   = esBecado ? parseInt(montoCuota, 10) : MONTO_BASE_CUOTA
+      const rutLimpioApo = estudiante.apoderado_rut_limpio
+      const batch = writeBatch(db)
+
+      batch.update(doc(db, 'Estudiantes', estudiante.id), {
+        nombre:           nombre.trim(),
+        curso,
+        apoderado_nombre: apoderadoNombre.trim() || null,
+        apoderado_email:  apoderadoEmail.trim()  || null,
+        telefono:         telefono.trim()        || null,
+        es_becado:        esBecado,
+        monto_cuota:      montoFinal,
+      })
+
+      if (rutLimpioApo) {
+        batch.update(doc(db, 'Apoderados', rutLimpioApo), {
+          nombre:   apoderadoNombre.trim() || null,
+          email:    apoderadoEmail.trim()  || null,
+          telefono: telefono.trim()        || null,
+        })
+      }
+
+      await batch.commit()
+      onSaved?.()
+      onClose()
+    } catch (err) {
+      console.error('[ModalEditarEstudiante]', err)
+      setError(err.message ?? 'Error al guardar los cambios.')
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <div className="bg-white border border-surface-400 rounded-2xl shadow-card-lg w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slide-up">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-500 sticky top-0 bg-white z-10">
+          <h2 className="text-ink-primary font-semibold text-base">Editar estudiante</h2>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink-primary text-xl leading-none w-7 h-7 flex items-center justify-center transition-colors">×</button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+
+          {/* RUT — solo lectura */}
+          <div>
+            <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">RUT (no editable)</label>
+            <input
+              disabled
+              value={estudiante.rut ?? '—'}
+              className="w-full bg-surface-700 border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-muted cursor-not-allowed"
+            />
+          </div>
+
+          {/* Nombre */}
+          <div>
+            <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre completo</label>
+            <input
+              value={nombre}
+              onChange={e => setNombre(e.target.value)}
+              className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+            />
+          </div>
+
+          {/* Curso */}
+          <div>
+            <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Curso</label>
+            <select
+              value={curso}
+              onChange={e => setCurso(e.target.value)}
+              className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+            >
+              <option value="">Seleccionar...</option>
+              {CURSOS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <hr className="border-surface-500" />
+          <p className="text-ink-muted text-xs font-semibold uppercase tracking-wide">Apoderado</p>
+
+          {/* Nombre apoderado */}
+          <div>
+            <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Nombre</label>
+            <input
+              value={apoderadoNombre}
+              onChange={e => setApoderadoNombre(e.target.value)}
+              className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Email</label>
+              <input
+                type="email"
+                value={apoderadoEmail}
+                onChange={e => setApoderadoEmail(e.target.value)}
+                className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-ink-muted text-xs font-semibold mb-1 uppercase tracking-wide">Teléfono</label>
+              <input
+                value={telefono}
+                onChange={e => setTelefono(e.target.value)}
+                placeholder="+56 9 1234 5678"
+                className="w-full bg-white border-2 border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+              />
+            </div>
+          </div>
+
+          <hr className="border-surface-500" />
+
+          {/* Beca */}
+          <div className={`rounded-xl border-2 transition-colors px-4 py-3 ${esBecado ? 'border-amber-300 bg-amber-50' : 'border-surface-400 bg-surface-700'}`}>
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={esBecado}
+                onClick={() => setEsBecado(v => !v)}
+                className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${esBecado ? 'bg-amber-400' : 'bg-surface-400'}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${esBecado ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </button>
+              <div>
+                <p className="text-ink-primary text-sm font-semibold">Beca / Arancel diferenciado</p>
+                <p className="text-ink-muted text-xs">Valor estándar: <span className="font-mono">{formatCLP(MONTO_BASE_CUOTA)}</span>/mes</p>
+              </div>
+            </label>
+            {esBecado && (
+              <div className="mt-3">
+                <label className="block text-amber-700 text-xs font-semibold mb-1 uppercase tracking-wide">Valor de cuota mensual ($)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={MONTO_BASE_CUOTA - 1}
+                  value={montoCuota}
+                  onChange={e => setMontoCuota(e.target.value)}
+                  placeholder="Ej: 75000"
+                  className="w-full bg-white border-2 border-amber-300 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200 transition-all"
+                />
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <p className="text-overdue text-xs bg-overdue-bg border border-overdue-border rounded-lg px-3 py-2">{error}</p>
+          )}
+        </div>
+        <div className="flex gap-3 px-6 py-4 border-t border-surface-500">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2.5 rounded-lg text-sm font-medium text-ink-secondary bg-surface-600 hover:bg-surface-500 border border-surface-400 transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleGuardar}
+            disabled={guardando}
+            className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-gray-900 bg-accent hover:bg-accent-hover disabled:opacity-40 transition-all active:scale-[0.98]"
+          >
+            {guardando ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-3.5 h-3.5 border-2 border-gray-900 border-t-transparent rounded-full animate-spin" />
+                Guardando...
+              </span>
+            ) : 'Guardar cambios'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PÁGINA PRINCIPAL DEL ADMIN
 // ═════════════════════════════════════════════════════════════════════════════
@@ -503,6 +617,7 @@ export default function AdminPage() {
   const [activeTab, setActiveTab]           = useState('revision')
   const [busqueda, setBusqueda]             = useState('')
   const [filtroEstado, setFiltroEstado]     = useState('todos')
+  const [currentPage, setCurrentPage]       = useState(1)
 
   // ── Data: comprobantes en revisión ──────────────────────────────────────────
   const [cuotasRevision, setCuotasRevision] = useState([])
@@ -524,6 +639,7 @@ export default function AdminPage() {
   // ── Modales ────────────────────────────────────────────────────────────────
   const [modalUrl, setModalUrl]               = useState(null)
   const [modalRegistrar, setModalRegistrar]   = useState(false)
+  const [estudianteEditando, setEstudianteEditando] = useState(null)
   const [enviandoRecordatorio, setEnviandoRecordatorio] = useState(false)
   const [recordatorioEnviado, setRecordatorioEnviado]   = useState(false)
 
@@ -576,15 +692,21 @@ export default function AdminPage() {
       }).sort((a, b) => (b.fechaEnvio ?? 0) - (a.fechaEnvio ?? 0))
       setCuotasRevision(data)
       setLoadingRevision(false)
-      fetchEstudiantes([...new Set(data.map(c => c.estudianteId))])
+      // Los nombres ya vienen del listener de Estudiantes — no se necesita fetch extra
     }, (err) => { setError(err.message); setLoadingRevision(false) })
     return () => unsub()
   }, [esAdmin])
 
-  // ── Listener: TODAS las cuotas ──────────────────────────────────────────────
-  useEffect(() => {
+  // ── Fetch puntual: TODAS las cuotas ────────────────────────────────────────
+  // Usamos getDocs en lugar de onSnapshot para evitar mantener un WebSocket
+  // abierto sobre toda la colección. Los cambios de estado (aprobar/rechazar)
+  // se reflejan inmediatamente en el listener de "en_revision"; aquí basta
+  // con leer una vez y ofrecer un botón de actualización manual.
+  const cargarTodasCuotas = useCallback(async () => {
     if (!esAdmin) return
-    const unsub = onSnapshot(collection(db, 'Cuotas'), (snapshot) => {
+    setLoadingTodas(true)
+    try {
+      const snapshot = await getDocs(collection(db, 'Cuotas'))
       const data = snapshot.docs.map((d) => {
         const f = d.data()
         return {
@@ -595,11 +717,14 @@ export default function AdminPage() {
         }
       }).sort((a, b) => (a.fechaVencimiento ?? 0) - (b.fechaVencimiento ?? 0))
       setTodasCuotas(data)
+    } catch (err) {
+      console.error('[AdminPage] Error al cargar cuotas:', err)
+    } finally {
       setLoadingTodas(false)
-      fetchEstudiantes([...new Set(data.map(c => c.estudianteId))])
-    })
-    return () => unsub()
+    }
   }, [esAdmin])
+
+  useEffect(() => { cargarTodasCuotas() }, [cargarTodasCuotas])
 
   // ── Fetch: estudiantes ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -701,24 +826,34 @@ export default function AdminPage() {
     let lista = todasCuotas
     if (filtroEstado !== 'todos') lista = lista.filter(c => c.estado === filtroEstado)
     if (busqueda.trim()) {
-      const q = busqueda.toLowerCase()
+      const q = normalizar(busqueda)
       lista = lista.filter(c => {
-        const nombre = estudiantesMap[c.estudianteId]?.toLowerCase() ?? ''
-        return nombre.includes(q) || c.mes.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)
+        const nombre = normalizar(estudiantesMap[c.estudianteId])
+        return nombre.includes(q) || normalizar(c.mes).includes(q) || c.id.toLowerCase().includes(q)
       })
     }
     return lista
   }, [todasCuotas, filtroEstado, busqueda, estudiantesMap])
 
+  // ── Reset de página al cambiar filtros ─────────────────────────────────────
+  useEffect(() => { setCurrentPage(1) }, [filtroEstado, busqueda])
+
+  // ── Paginación ─────────────────────────────────────────────────────────────
+  const totalPages       = Math.max(1, Math.ceil(cuotasFiltradas.length / ITEMS_PER_PAGE))
+  const cuotasPaginadas  = cuotasFiltradas.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE,
+  )
+
   // ── Filtro de estudiantes ─────────────────────────────────────────────────
   const apoderadosFiltrados = useMemo(() => {
     if (!busqueda.trim()) return listaEstudiantes
-    const q = busqueda.toLowerCase()
+    const q = normalizar(busqueda)
     return listaEstudiantes.filter(e =>
-      e.nombre?.toLowerCase().includes(q) ||
-      e.rut?.toLowerCase().includes(q) ||
-      e.curso?.toLowerCase().includes(q) ||
-      e.apoderado_nombre?.toLowerCase().includes(q)
+      normalizar(e.nombre).includes(q) ||
+      normalizar(e.rut).includes(q) ||
+      normalizar(e.curso).includes(q) ||
+      normalizar(e.apoderado_nombre).includes(q)
     )
   }, [listaEstudiantes, busqueda])
 
@@ -753,10 +888,11 @@ export default function AdminPage() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const tabItems = [
-    { id: 'revision', label: 'Comprobantes', count: stats.enRevision },
-    { id: 'todas',    label: 'Todas las cuotas', count: stats.total },
-    { id: 'apoderados', label: 'Estudiantes', count: listaEstudiantes.length },
-    { id: 'resumen',  label: 'Resumen financiero' },
+    { id: 'revision',      label: 'Comprobantes',    count: stats.enRevision },
+    { id: 'todas',         label: 'Todas las cuotas', count: stats.total },
+    { id: 'apoderados',    label: 'Estudiantes',     count: listaEstudiantes.length },
+    { id: 'resumen',       label: 'Resumen financiero' },
+    { id: 'configuracion', label: 'Configuración' },
   ]
 
   return (
@@ -918,7 +1054,8 @@ export default function AdminPage() {
         {/* ── TAB: TODAS LAS CUOTAS ──────────────────────────────────────── */}
         {activeTab === 'todas' && (
           <>
-            {/* Filtro de estados */}
+            {/* Filtro de estados + botón de refresh */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex gap-2 flex-wrap">
               {['todos', 'pendiente', 'atrasado', 'en_revision', 'pagado'].map((est) => (
                 <button key={est} onClick={() => setFiltroEstado(est)}
@@ -931,6 +1068,18 @@ export default function AdminPage() {
                 </button>
               ))}
             </div>
+              <button
+                onClick={cargarTodasCuotas}
+                disabled={loadingTodas}
+                title="Actualizar lista de cuotas"
+                className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink-primary bg-white border border-surface-400 hover:border-ink-muted px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 whitespace-nowrap"
+              >
+                <svg className={`w-3.5 h-3.5 ${loadingTodas ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Actualizar
+              </button>
+            </div>
 
             {loadingTodas ? (
               <div className="bg-white border border-surface-500 rounded-xl p-12 flex items-center justify-center"><div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>
@@ -938,7 +1087,7 @@ export default function AdminPage() {
               <div className="bg-white border border-surface-500 rounded-xl overflow-hidden shadow-card">
                 <div className="px-5 py-3 border-b border-surface-500 flex items-center justify-between">
                   <p className="text-ink-muted text-xs">{cuotasFiltradas.length} cuota{cuotasFiltradas.length !== 1 ? 's' : ''} encontrada{cuotasFiltradas.length !== 1 ? 's' : ''}</p>
-                  <p className="text-ink-disabled text-xs">Quick Win #5: hover sobre 'Pagado' para ver quién aprobó</p>
+                  <p className="text-ink-disabled text-xs">Hover sobre 'Pagado' para ver quién aprobó</p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -953,7 +1102,7 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {cuotasFiltradas.map((c) => (
+                      {cuotasPaginadas.map((c) => (
                         <tr key={c.id} className="border-b border-surface-500 hover:bg-surface-600/50 transition-colors">
                           <td className="px-4 py-3 text-ink-primary text-sm font-medium">{c.mes} {c.anio}</td>
                           <td className="px-4 py-3 text-ink-primary text-sm">{estudiantesMap[c.estudianteId] ?? <Sk className="w-24 h-4 inline-block" />}</td>
@@ -962,7 +1111,6 @@ export default function AdminPage() {
                           <td className="px-4 py-3">
                             <div className="group relative">
                               <EstadoBadge estado={c.estado} />
-                              {/* Quick Win #5: Auditoría — quién aprobó */}
                               {c.estado === 'pagado' && c.aprobadoPor && (
                                 <div className="absolute bottom-full left-0 mb-1 hidden group-hover:block z-20">
                                   <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-1.5 shadow-lg whitespace-nowrap">
@@ -981,6 +1129,29 @@ export default function AdminPage() {
                     </tbody>
                   </table>
                 </div>
+                {/* ── Controles de paginación ── */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between px-5 py-3 border-t border-surface-500 bg-surface-800/40">
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-surface-400 bg-white text-ink-secondary hover:bg-surface-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      ← Anterior
+                    </button>
+                    <span className="text-xs text-ink-muted">
+                      Página <span className="font-semibold text-ink-primary">{currentPage}</span> de <span className="font-semibold text-ink-primary">{totalPages}</span>
+                      <span className="ml-2 text-ink-disabled">({cuotasFiltradas.length} resultados)</span>
+                    </span>
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-surface-400 bg-white text-ink-secondary hover:bg-surface-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Siguiente →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -1004,6 +1175,7 @@ export default function AdminPage() {
                         <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Apoderado</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Contacto</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Estado cuotas</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1017,14 +1189,14 @@ export default function AdminPage() {
                           <tr key={e.id} className="border-b border-surface-500 hover:bg-surface-600/50 transition-colors">
                             <td className="px-4 py-3.5 text-ink-primary text-sm font-medium">
                               {e.nombre ?? '—'}
-                              {e.beca && <span className="ml-2 text-xs bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">Beca</span>}
+                              {(e.es_becado || e.beca) && <span className="ml-2 text-xs bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">Beca</span>}
                             </td>
                             <td className="px-4 py-3.5 text-ink-secondary text-sm font-mono">{e.rut ?? '—'}</td>
                             <td className="px-4 py-3.5 text-ink-secondary text-sm">{e.curso ?? '—'}</td>
                             <td className="px-4 py-3.5 text-ink-secondary text-sm hidden md:table-cell">{e.apoderado_nombre ?? <span className="text-ink-disabled italic">—</span>}</td>
                             <td className="px-4 py-3.5 hidden md:table-cell">
                               <div className="space-y-0.5">
-                                {e.email    && <p className="text-ink-secondary text-xs">{e.email}</p>}
+                                {(e.apoderado_email || e.email) && <p className="text-ink-secondary text-xs">{e.apoderado_email || e.email}</p>}
                                 {e.telefono && (
                                   <button
                                     onClick={() => {
@@ -1036,7 +1208,7 @@ export default function AdminPage() {
                                     💬 {e.telefono}
                                   </button>
                                 )}
-                                {!e.email && !e.telefono && <span className="text-ink-disabled text-xs italic">Sin contacto</span>}
+                                {!e.apoderado_email && !e.email && !e.telefono && <span className="text-ink-disabled text-xs italic">Sin contacto</span>}
                               </div>
                             </td>
                             <td className="px-4 py-3.5">
@@ -1047,11 +1219,19 @@ export default function AdminPage() {
                                 {cuotasEst.length === 0 && <span className="text-ink-disabled text-xs italic">Sin cuotas</span>}
                               </div>
                             </td>
+                            <td className="px-4 py-3.5">
+                              <button
+                                onClick={() => setEstudianteEditando(e)}
+                                className="text-xs bg-surface-600 hover:bg-surface-500 text-ink-secondary px-2.5 py-1.5 rounded-md border border-surface-400 transition-colors whitespace-nowrap"
+                              >
+                                Editar
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
                       {apoderadosFiltrados.length === 0 && (
-                        <tr><td colSpan={6} className="px-4 py-12 text-center text-ink-muted text-sm">No se encontraron estudiantes.</td></tr>
+                        <tr><td colSpan={7} className="px-4 py-12 text-center text-ink-muted text-sm">No se encontraron estudiantes.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -1127,11 +1307,72 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* ── TAB: CONFIGURACIÓN ─────────────────────────────────────────── */}
+        {activeTab === 'configuracion' && (
+          <SeccionConfiguracion />
+        )}
+
+        {/* ── SOPORTE TÉCNICO ─────────────────────────────────────────────── */}
+        <div className="pt-2">
+
+          {/* Soporte Técnico */}
+          <div className="bg-white border border-surface-500 rounded-xl px-5 py-4 shadow-card max-w-sm">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+                <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-ink-primary text-sm font-semibold">Soporte Técnico</p>
+                <p className="text-ink-muted text-xs">SynapTech Spa</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <a
+                href="https://wa.me/56983568212"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-xs text-[#25D366] hover:text-white hover:bg-[#25D366] px-2 py-1 rounded-md border border-[#25D366]/30 bg-[#25D366]/5 transition-all w-fit font-medium"
+              >
+                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                </svg>
+                +56 9 8356 8212
+              </a>
+              <a
+                href="mailto:ignaciiio.mate@gmail.com"
+                className="flex items-center gap-2 text-xs text-ink-secondary hover:text-blue-600 transition-colors group"
+              >
+                <svg className="w-3.5 h-3.5 text-ink-muted group-hover:text-blue-600 transition-colors flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                ignaciiio.mate@gmail.com
+              </a>
+            </div>
+          </div>
+
+        </div>
+
       </main>
+
+      {/* ── FOOTER ─────────────────────────────────────────────────────────── */}
+      <footer className="border-t border-surface-600 mt-4 py-4">
+        <p className="text-center text-ink-disabled text-xs tracking-wide">
+          Desarrollado por: <span className="font-medium text-ink-muted">SynapTech Spa</span>
+        </p>
+      </footer>
 
       {/* ── MODALES ────────────────────────────────────────────────────────── */}
       {modalUrl && <ModalComprobante url={modalUrl} onClose={() => setModalUrl(null)} />}
-      {modalRegistrar && <ModalRegistrarApoderado onClose={() => setModalRegistrar(false)} onSuccess={() => {}} />}
+      {modalRegistrar && <ModalRegistrarEstudiante onClose={() => setModalRegistrar(false)} onSuccess={() => {}} />}
+      {estudianteEditando && (
+        <ModalEditarEstudiante
+          estudiante={estudianteEditando}
+          onClose={() => setEstudianteEditando(null)}
+          onSaved={() => setEstudianteEditando(null)}
+        />
+      )}
 
     </div>
   )
