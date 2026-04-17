@@ -7,60 +7,51 @@
 // Respuesta:     { url: string, token: string }
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NextResponse }  from 'next/server'
-import { adminDb }       from '../../../../firebase/adminConfig'
+import { NextResponse } from 'next/server'
+import { adminDb }      from '../../../../firebase/adminConfig'
 
-// ── Inicializar WebPay Plus con lazy loading ─────────────────────────────────
-// Se importa dinámicamente para evitar errores durante el build de Next.js.
-// transbank-sdk es CommonJS: el dynamic import lo envuelve en { default: module }
+// ── URL base de la app ────────────────────────────────────────────────────────
+// NEXT_PUBLIC_BASE_URL tiene prioridad; si no está, Vercel provee VERCEL_URL
+// automáticamente en cada deployment (no requiere configuración manual).
+function getBaseUrl() {
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL
+  if (process.env.VERCEL_URL)           return `https://${process.env.VERCEL_URL}`
+  return 'http://localhost:3000'
+}
+
+// ── Credenciales Transbank con fallback a integración ────────────────────────
+function getTbkCredentials() {
+  return {
+    commerceCode: process.env.TRANSBANK_COMMERCE_CODE ?? '597055555532',
+    apiKey:       process.env.TRANSBANK_API_KEY       ?? '579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C',
+    isProduction: process.env.TRANSBANK_ENVIRONMENT   === 'PRODUCTION',
+  }
+}
+
+// ── Lazy-init del SDK (CJS via dynamic import) ────────────────────────────────
 let _tx = null
 async function getTx() {
   if (_tx) return _tx
-  const tbk = await import('transbank-sdk')
-  // CJS interop: named exports pueden estar en tbk o en tbk.default
+  const tbk         = await import('transbank-sdk')
   const mod         = tbk.default ?? tbk
-  const WebpayPlus  = mod.WebpayPlus
-  const Environment = mod.Environment
-  const Options     = mod.Options  // Options es export de nivel superior, NO de WebpayPlus
+  const { commerceCode, apiKey, isProduction } = getTbkCredentials()
+  const env         = isProduction ? mod.Environment.Production : mod.Environment.Integration
 
-  const env = process.env.TRANSBANK_ENVIRONMENT === 'PRODUCTION'
-    ? Environment.Production
-    : Environment.Integration
+  console.log('[Transbank] init | code:', commerceCode, '| env:', isProduction ? 'PROD' : 'INT')
 
-  _tx = new WebpayPlus.Transaction(
-    new Options(
-      process.env.TRANSBANK_COMMERCE_CODE,
-      process.env.TRANSBANK_API_KEY,
-      env
-    )
-  )
+  _tx = new mod.WebpayPlus.Transaction(new mod.Options(commerceCode, apiKey, env))
   return _tx
 }
 
 export async function POST(request) {
   try {
-    // ── 0. Validar variables de entorno requeridas ────────────────────────────
-    const missingEnv = [
-      'TRANSBANK_COMMERCE_CODE',
-      'TRANSBANK_API_KEY',
-      'NEXT_PUBLIC_BASE_URL',
-    ].filter(k => !process.env[k])
-
-    if (missingEnv.length) {
-      console.error('[API /pago/iniciar] Variables de entorno faltantes:', missingEnv)
-      return NextResponse.json(
-        { error: `Configuración incompleta del servidor: ${missingEnv.join(', ')}` },
-        { status: 500 }
-      )
-    }
-
     const { cuotaId } = await request.json()
 
     if (!cuotaId || typeof cuotaId !== 'string') {
       return NextResponse.json({ error: 'cuotaId es requerido' }, { status: 400 })
     }
 
-    // ── 1. Verificar que la cuota existe y está pendiente/atrasada ────────────
+    // ── 1. Verificar cuota ────────────────────────────────────────────────────
     const cuotaSnap = await adminDb.collection('Cuotas').doc(cuotaId).get()
 
     if (!cuotaSnap.exists) {
@@ -75,20 +66,23 @@ export async function POST(request) {
       )
     }
 
-    // ── 2. Crear la transacción en Transbank ──────────────────────────────────
+    // ── 2. Crear transacción ──────────────────────────────────────────────────
+    // buyOrder:  solo alfanumérico, máx 26 chars (IDs Firestore = 20 chars ✓)
+    // sessionId: solo alfanumérico, máx 61 chars
+    // returnUrl: debe ser HTTPS accesible públicamente
     const buyOrder  = cuotaId.slice(0, 26)
-    const sessionId = `cdt_${cuotaId}`.slice(0, 61)
+    const sessionId = `cdt${cuotaId}`.slice(0, 61)
     const amount    = cuota.monto
-    const returnUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/pago/confirmar`
+    const returnUrl = `${getBaseUrl()}/api/pago/confirmar`
 
-    const tx = await getTx()
+    console.log('[Transbank] create →', { buyOrder, sessionId, amount, returnUrl })
+
+    const tx       = await getTx()
     const response = await tx.create(buyOrder, sessionId, amount, returnUrl)
 
-    return NextResponse.json({
-      url:     response.url,
-      token:   response.token,
-      cuotaId,
-    })
+    console.log('[Transbank] create OK → token:', response.token?.slice(0, 20), '...')
+
+    return NextResponse.json({ url: response.url, token: response.token, cuotaId })
 
   } catch (error) {
     console.error('[API /pago/iniciar] Error:', error?.message ?? error)

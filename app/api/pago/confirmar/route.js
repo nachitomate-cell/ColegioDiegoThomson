@@ -1,59 +1,72 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // app/api/pago/confirmar/route.js
 // Transbank redirige aquí después de que el usuario completa el pago.
-// Puede venir como GET (query param) o POST (form-urlencoded body).
-//
-// La API de Transbank devuelve JSON en snake_case:
-//   response_code, buy_order, authorization_code, card_detail.card_number
+// Puede venir como POST (form-urlencoded) o GET (query param).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NextResponse }  from 'next/server'
-import { adminDb }       from '../../../../firebase/adminConfig'
-import admin             from '../../../../firebase/adminConfig'
+import { NextResponse } from 'next/server'
+import { adminDb }      from '../../../../firebase/adminConfig'
+import admin            from '../../../../firebase/adminConfig'
 
-// ── Lazy loading de Transbank ────────────────────────────────────────────────
+// ── URL base ──────────────────────────────────────────────────────────────────
+function getBaseUrl() {
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL
+  if (process.env.VERCEL_URL)           return `https://${process.env.VERCEL_URL}`
+  return 'http://localhost:3000'
+}
+
+// ── Credenciales Transbank con fallback a integración ────────────────────────
+function getTbkCredentials() {
+  return {
+    commerceCode: process.env.TRANSBANK_COMMERCE_CODE ?? '597055555532',
+    apiKey:       process.env.TRANSBANK_API_KEY       ?? '579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C',
+    isProduction: process.env.TRANSBANK_ENVIRONMENT   === 'PRODUCTION',
+  }
+}
+
+// ── Lazy-init del SDK ─────────────────────────────────────────────────────────
 let _tx = null
 async function getTx() {
   if (_tx) return _tx
-  const tbk        = await import('transbank-sdk')
-  const mod        = tbk.default ?? tbk
-  const WebpayPlus = mod.WebpayPlus
-  const Environment = mod.Environment
-  const Options    = mod.Options
+  const tbk         = await import('transbank-sdk')
+  const mod         = tbk.default ?? tbk
+  const { commerceCode, apiKey, isProduction } = getTbkCredentials()
+  const env         = isProduction ? mod.Environment.Production : mod.Environment.Integration
 
-  const env = process.env.TRANSBANK_ENVIRONMENT === 'PRODUCTION'
-    ? Environment.Production
-    : Environment.Integration
+  console.log('[Transbank/confirmar] init | code:', commerceCode, '| env:', isProduction ? 'PROD' : 'INT')
 
-  _tx = new WebpayPlus.Transaction(
-    new Options(
-      process.env.TRANSBANK_COMMERCE_CODE,
-      process.env.TRANSBANK_API_KEY,
-      env
-    )
-  )
+  _tx = new mod.WebpayPlus.Transaction(new mod.Options(commerceCode, apiKey, env))
   return _tx
 }
 
-// ── Lógica compartida de commit ──────────────────────────────────────────────
+// ── Lógica compartida de commit ───────────────────────────────────────────────
 async function commitToken(tokenWs) {
-  const tx       = await getTx()
-  const response = await tx.commit(tokenWs)
+  const base = getBaseUrl()
 
-  // Transbank devuelve snake_case: response_code, buy_order, authorization_code
+  console.log('[Transbank] commit → token:', tokenWs?.slice(0, 20), '...')
+
+  let response
+  try {
+    const tx = await getTx()
+    response = await tx.commit(tokenWs)
+    console.log('[Transbank] commit response:', JSON.stringify(response))
+  } catch (err) {
+    // El SDK lanza TransbankError con .code y .message
+    console.error('[Transbank] commit error | code:', err?.code, '| msg:', err?.message, '| status:', err?.httpCode ?? err?.status)
+    return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
+  }
+
   const aprobado = response.response_code === 0 && response.status === 'AUTHORIZED'
 
   if (aprobado) {
-    const cuotaId   = response.buy_order
-    const cuotasRef = adminDb.collection('Cuotas')
-    const snapshot  = await cuotasRef
-      .where(admin.firestore.FieldPath.documentId(), '>=', cuotaId)
-      .where(admin.firestore.FieldPath.documentId(), '<',  cuotaId + '\uf8ff')
-      .limit(1)
-      .get()
+    const cuotaId = response.buy_order
 
-    if (!snapshot.empty) {
-      await snapshot.docs[0].ref.update({
+    // Buscar la cuota por ID exacto (buy_order = cuotaId.slice(0,26) y IDs Firestore = 20 chars)
+    const cuotaRef = adminDb.collection('Cuotas').doc(cuotaId)
+    const snap     = await cuotaRef.get()
+
+    if (snap.exists) {
+      await cuotaRef.update({
         estado:                   'pagado',
         fecha_pago:               admin.firestore.FieldValue.serverTimestamp(),
         comprobante_url:          null,
@@ -62,24 +75,27 @@ async function commitToken(tokenWs) {
         transbank_transaction_id: tokenWs,
         transbank_amount:         response.amount,
       })
+    } else {
+      console.error('[Transbank] cuota no encontrada para buy_order:', cuotaId)
     }
 
     return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=true` +
+      `${base}/pago/resultado?success=true` +
       `&monto=${response.amount}` +
       `&auth=${response.authorization_code}` +
       `&cuotaId=${cuotaId}`
     )
   } else {
+    console.warn('[Transbank] pago rechazado | response_code:', response.response_code, '| status:', response.status)
     return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=false` +
-      `&motivo=rechazado&code=${response.response_code}`
+      `${base}/pago/resultado?success=false&motivo=rechazado&code=${response.response_code}`
     )
   }
 }
 
-// ── POST: Transbank envía token_ws en body form-urlencoded ───────────────────
+// ── POST: Transbank envía token_ws en body form-urlencoded ────────────────────
 export async function POST(request) {
+  const base = getBaseUrl()
   try {
     let tokenWs
     const contentType = request.headers.get('content-type') ?? ''
@@ -87,50 +103,45 @@ export async function POST(request) {
     if (contentType.includes('application/x-www-form-urlencoded')) {
       const text = await request.text()
       tokenWs = new URLSearchParams(text).get('token_ws')
+      console.log('[/pago/confirmar POST] token_ws recibido:', tokenWs?.slice(0, 20), '...')
     } else {
       const body = await request.json().catch(() => ({}))
       tokenWs = body.token_ws
     }
 
     if (!tokenWs) {
-      return NextResponse.redirect(
-        `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=false&motivo=cancelado`
-      )
+      console.warn('[/pago/confirmar POST] sin token_ws → cancelado')
+      return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=cancelado`)
     }
 
     return await commitToken(tokenWs)
   } catch (error) {
-    console.error('[API /pago/confirmar POST] Error:', error)
-    return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=false&motivo=error`
-    )
+    console.error('[/pago/confirmar POST] Error inesperado:', error?.message ?? error)
+    return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
   }
 }
 
-// ── GET: Transbank redirige con token_ws o TBK_TOKEN en query params ─────────
+// ── GET: Transbank redirige con token_ws o TBK_TOKEN en query params ──────────
 export async function GET(request) {
+  const base = getBaseUrl()
   const { searchParams } = new URL(request.url)
   const tbkToken = searchParams.get('TBK_TOKEN')
   const tokenWs  = searchParams.get('token_ws')
 
   if (tbkToken) {
-    return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=false&motivo=cancelado`
-    )
+    console.warn('[/pago/confirmar GET] TBK_TOKEN recibido → cancelado por usuario')
+    return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=cancelado`)
   }
 
   if (tokenWs) {
+    console.log('[/pago/confirmar GET] token_ws recibido:', tokenWs?.slice(0, 20), '...')
     try {
       return await commitToken(tokenWs)
     } catch (error) {
-      console.error('[API /pago/confirmar GET] Error:', error)
-      return NextResponse.redirect(
-        `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=false&motivo=error`
-      )
+      console.error('[/pago/confirmar GET] Error inesperado:', error?.message ?? error)
+      return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
     }
   }
 
-  return NextResponse.redirect(
-    `${process.env.NEXT_PUBLIC_BASE_URL}/pago/resultado?success=false&motivo=error`
-  )
+  return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
 }
