@@ -39,6 +39,21 @@ async function getTx() {
 
 export async function POST(request) {
   try {
+    // ── 0. Validar variables de entorno requeridas ────────────────────────────
+    const missingEnv = [
+      'TRANSBANK_COMMERCE_CODE',
+      'TRANSBANK_API_KEY',
+      'NEXT_PUBLIC_BASE_URL',
+    ].filter(k => !process.env[k])
+
+    if (missingEnv.length) {
+      console.error('[API /pago/iniciar] Variables de entorno faltantes:', missingEnv)
+      return NextResponse.json(
+        { error: `Configuración incompleta del servidor: ${missingEnv.join(', ')}` },
+        { status: 500 }
+      )
+    }
+
     const { cuotaId } = await request.json()
 
     if (!cuotaId || typeof cuotaId !== 'string') {
@@ -46,7 +61,6 @@ export async function POST(request) {
     }
 
     // ── 1. Verificar que la cuota existe y está pendiente/atrasada ────────────
-    // Se usa Admin SDK para no requerir auth en el servidor
     const cuotaSnap = await adminDb.collection('Cuotas').doc(cuotaId).get()
 
     if (!cuotaSnap.exists) {
@@ -62,10 +76,6 @@ export async function POST(request) {
     }
 
     // ── 2. Crear la transacción en Transbank ──────────────────────────────────
-    // buyOrder: identificador único de la orden (máx 26 chars alfanumérico)
-    // sessionId: referencia interna (máx 61 chars)
-    // amount:    monto en pesos CLP (entero, sin decimales)
-    // returnUrl: URL donde Transbank redirigirá con el token tras el pago
     const buyOrder  = cuotaId.slice(0, 26)
     const sessionId = `cdt_${cuotaId}`.slice(0, 61)
     const amount    = cuota.monto
@@ -81,9 +91,9 @@ export async function POST(request) {
     })
 
   } catch (error) {
-    console.error('[API /pago/iniciar] Error:', error)
+    console.error('[API /pago/iniciar] Error:', error?.message ?? error)
     return NextResponse.json(
-      { error: 'Error al iniciar el pago. Intenta nuevamente.' },
+      { error: error?.message ?? 'Error al iniciar el pago. Intenta nuevamente.' },
       { status: 500 }
     )
   }
