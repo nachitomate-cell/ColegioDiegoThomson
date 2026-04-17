@@ -43,7 +43,7 @@ const Timestamp  = admin.firestore.Timestamp
 // ─── Constantes ───────────────────────────────────────────────────────────────
 const ANIO          = 2026
 const MESES         = ['Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-const MONTO_NORMAL  = 87000
+const MONTO_NORMAL  = 97500
 const EMAIL_DOMAIN  = 'colegiodiegothompson.cl'
 const PASSWORD_DEMO = 'Demo2026!'
 
