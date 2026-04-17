@@ -7,8 +7,9 @@
 // Respuesta:     { url: string, token: string }
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NextResponse } from 'next/server'
-import { adminDb }      from '../../../../firebase/adminConfig'
+import { NextResponse }         from 'next/server'
+import { adminDb }             from '../../../../firebase/adminConfig'
+import { verificarOwnership }  from '../../../../lib/verificarOwnership'
 
 // ── URL base de la app ────────────────────────────────────────────────────────
 // NEXT_PUBLIC_BASE_URL tiene prioridad; si no está, Vercel provee VERCEL_URL
@@ -66,7 +67,13 @@ export async function POST(request) {
       )
     }
 
-    // ── 2. Crear transacción ──────────────────────────────────────────────────
+    // ── 2. Verificar que el usuario autenticado es dueño de la cuota ──────────
+    const esOwner = await verificarOwnership(request, cuota)
+    if (!esOwner) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+    }
+
+    // ── 3. Crear transacción ──────────────────────────────────────────────────
     // buyOrder:  solo alfanumérico, máx 26 chars (IDs Firestore = 20 chars ✓)
     // sessionId: solo alfanumérico, máx 61 chars
     // returnUrl: debe ser HTTPS accesible públicamente

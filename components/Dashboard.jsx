@@ -10,6 +10,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage'
 import { useRouter }     from 'next/navigation'
 
 import { auth, db, storage } from '../firebase/firebaseConfig'
+import { toast }              from 'sonner'
 import { useAuth }        from '../hooks/useAuth'
 import { useEstudiante }  from '../hooks/useEstudiante'
 import { useCuotas }      from '../hooks/useCuotas'
@@ -797,7 +798,7 @@ function ModalMatricula2027({ estudiante, onClose }) {
 
         <div className="flex gap-3 px-6 py-4 border-t border-surface-500">
           <a
-            href="mailto:secretaria@colegiodiegothompson.cl?subject=Comprobante Matrícula 2027"
+            href="mailto:secretaria@colegiodiegothomson.cl?subject=Comprobante Matrícula 2027"
             className="flex-1 py-2.5 rounded-lg text-xs font-semibold text-ink-primary bg-surface-600 hover:bg-surface-500 border border-surface-400 text-center transition-colors"
           >
             Enviar por Email
@@ -1102,16 +1103,22 @@ export default function Dashboard() {
         ? { cuotaId: cuota.id, bankId }
         : { cuotaId: cuota.id }
 
+      // Enviar token de autenticación para verificar ownership en el servidor
+      const idToken = await auth.currentUser?.getIdToken()
+
       const res = await fetch(endpoint, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
+        headers: {
+          'Content-Type':  'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify(body),
       })
 
       const data = await res.json()
 
       if (!res.ok) {
-        alert(data.error ?? 'Error al iniciar el pago. Intenta nuevamente.')
+        toast.error(data.error ?? 'Error al iniciar el pago. Intenta nuevamente.')
         setPagoEnProceso(null)
         return
       }
@@ -1164,7 +1171,7 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error('[Dashboard] Error al iniciar pago:', err)
-      alert('Error de conexión. Verifica tu red e intenta nuevamente.')
+      toast.error('Error de conexión. Verifica tu red e intenta nuevamente.')
       setPagoEnProceso(null)
     }
   }
@@ -1343,22 +1350,22 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-3">
-            <a href="mailto:secretaria@colegiodiegothompson.cl"
+            <a href="mailto:secretaria@colegiodiegothomson.cl"
               className="flex items-center gap-2 text-xs text-ink-secondary hover:text-accent-hover transition-colors group"
             >
               <svg className="w-3.5 h-3.5 text-ink-muted group-hover:text-accent-hover transition-colors flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
-              secretaria@colegiodiegothompson.cl
+              secretaria@colegiodiegothomson.cl
             </a>
             <span className="hidden sm:block text-surface-500">·</span>
-            <a href="mailto:p.torres@colegiodiegothompson.cl"
+            <a href="mailto:p.torres@colegiodiegothomson.cl"
               className="flex items-center gap-2 text-xs text-ink-secondary hover:text-accent-hover transition-colors group"
             >
               <svg className="w-3.5 h-3.5 text-ink-muted group-hover:text-accent-hover transition-colors flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
-              p.torres@colegiodiegothompson.cl
+              p.torres@colegiodiegothomson.cl
             </a>
           </div>
         </div>

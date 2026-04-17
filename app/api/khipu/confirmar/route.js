@@ -68,23 +68,29 @@ export async function POST(request) {
     }
 
     // ── Marcar cuota como pagada si el status es "done" ──────────────────────
+    // Transacción atómica: evita doble escritura si Khipu reintenta el webhook.
     if (data.status === 'done') {
-      const cuotaRef  = adminDb.collection('Cuotas').doc(cuotaId)
-      const cuotaSnap = await cuotaRef.get()
+      const cuotaRef = adminDb.collection('Cuotas').doc(cuotaId)
 
-      if (cuotaSnap.exists) {
-        await cuotaRef.update({
+      await adminDb.runTransaction(async (t) => {
+        const snap = await t.get(cuotaRef)
+        if (!snap.exists) return
+        if (snap.data().estado === 'pagado') {
+          console.warn('[Khipu] cuota ya estaba pagada, ignorando duplicado:', cuotaId)
+          return
+        }
+        t.update(cuotaRef, {
           estado:          'pagado',
           fecha_pago:      admin.firestore.FieldValue.serverTimestamp(),
           comprobante_url: null,
-          khipu_payment_id:      data.payment_id,
-          khipu_amount:          data.amount,
-          aprobado_por:          'online',
-          aprobado_nombre:       'Khipu',
-          metodo_pago:           'khipu',
+          khipu_payment_id: data.payment_id,
+          khipu_amount:     data.amount,
+          aprobado_por:     'online',
+          aprobado_nombre:  'Khipu',
+          metodo_pago:      'khipu',
         })
-        console.log(`[Khipu] Cuota ${cuotaId} marcada como PAGADA (payment_id: ${data.payment_id})`)
-      }
+      })
+      console.log(`[Khipu] Cuota ${cuotaId} marcada como PAGADA (payment_id: ${data.payment_id})`)
     }
 
     // Khipu requiere STATUS 200 para no reintentar la notificación

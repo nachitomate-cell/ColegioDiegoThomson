@@ -8,8 +8,9 @@
 //   • Body:     JSON                                (ya no form-urlencoded)
 //   • KHIPU_RECEIVER_ID ya no es necesario
 // ─────────────────────────────────────────────────────────────────────────────
-import { NextResponse } from 'next/server'
-import { adminDb }      from '../../../../firebase/adminConfig'
+import { NextResponse }         from 'next/server'
+import { adminDb }             from '../../../../firebase/adminConfig'
+import { verificarOwnership }  from '../../../../lib/verificarOwnership'
 
 const KHIPU_V3_URL = 'https://payment-api.khipu.com/v3/payments'
 
@@ -28,6 +29,12 @@ export async function POST(request) {
     const cuota = cuotaSnap.data()
     if (!['pendiente', 'atrasado'].includes(cuota.estado)) {
       return NextResponse.json({ error: 'La cuota no está pendiente de pago' }, { status: 409 })
+    }
+
+    // ── Verificar que el usuario autenticado es dueño de la cuota ─────────────
+    const esOwner = await verificarOwnership(request, cuota)
+    if (!esOwner) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
     }
 
     const apiKey = process.env.KHIPU_SECRET

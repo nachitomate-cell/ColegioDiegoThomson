@@ -78,13 +78,21 @@ async function commitToken(tokenWs) {
 
   if (aprobado) {
     const cuotaId = response.buy_order
-
-    // Buscar la cuota por ID exacto (buy_order = cuotaId.slice(0,26) y IDs Firestore = 20 chars)
     const cuotaRef = adminDb.collection('Cuotas').doc(cuotaId)
-    const snap     = await cuotaRef.get()
 
-    if (snap.exists) {
-      await cuotaRef.update({
+    // Transacción atómica: evita marcar como pagada dos veces si Transbank
+    // redirige o reintenta el webhook más de una vez (idempotencia).
+    await adminDb.runTransaction(async (t) => {
+      const snap = await t.get(cuotaRef)
+      if (!snap.exists) {
+        console.error('[Transbank] cuota no encontrada para buy_order:', cuotaId)
+        return
+      }
+      if (snap.data().estado === 'pagado') {
+        console.warn('[Transbank] cuota ya estaba pagada, ignorando duplicado:', cuotaId)
+        return
+      }
+      t.update(cuotaRef, {
         estado:                   'pagado',
         fecha_pago:               admin.firestore.FieldValue.serverTimestamp(),
         comprobante_url:          null,
@@ -93,9 +101,7 @@ async function commitToken(tokenWs) {
         transbank_transaction_id: tokenWs,
         transbank_amount:         response.amount,
       })
-    } else {
-      console.error('[Transbank] cuota no encontrada para buy_order:', cuotaId)
-    }
+    })
 
     return NextResponse.redirect(
       `${base}/pago/resultado?success=true` +
