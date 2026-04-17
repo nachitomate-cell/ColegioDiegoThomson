@@ -36,16 +36,16 @@ service cloud.firestore {
     // Rama en es_voluntaria: las cuotas CGPA no tienen estudiante_id ni mes.
     function cuotaValida() {
       let d = request.resource.data;
-      if (d.get('es_voluntaria', false) == true) {
-        return d.keys().hasAll(['concepto', 'monto', 'es_voluntaria', 'estado', 'apoderado_id'])
+      let esVoluntaria = d.get('es_voluntaria', false) == true;
+      return esVoluntaria
+        ? (d.keys().hasAll(['concepto', 'monto', 'es_voluntaria', 'estado', 'apoderado_id'])
             && d.monto is number && d.monto > 0
             && d.apoderado_id is string && d.apoderado_id.size() > 0
-            && d.estado in ['pendiente', 'en_revision', 'pagado'];
-      }
-      return d.keys().hasAll(['estudiante_id', 'mes', 'anio', 'monto', 'estado'])
-          && d.monto is number && d.monto > 0
-          && d.estudiante_id is string && d.estudiante_id.size() > 0
-          && d.estado in ['pendiente', 'atrasado', 'en_revision', 'pagado'];
+            && d.estado in ['pendiente', 'en_revision', 'pagado'])
+        : (d.keys().hasAll(['estudiante_id', 'mes', 'anio', 'monto', 'estado'])
+            && d.monto is number && d.monto > 0
+            && d.estudiante_id is string && d.estudiante_id.size() > 0
+            && d.estado in ['pendiente', 'atrasado', 'en_revision', 'pagado']);
     }
 
     // ════════════════════════════════════════════════════════════════════════
