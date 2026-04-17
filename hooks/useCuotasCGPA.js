@@ -1,22 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // hooks/useCuotasCGPA.js
-// Escucha en tiempo real las cuotas voluntarias (CGPA) de un apoderado.
-// A diferencia de useCuotas, filtra por apoderado_id en lugar de estudiante_id,
-// ya que la cuota CGPA pertenece a la familia, no al alumno individual.
+// Carga las cuotas voluntarias (CGPA) de un apoderado con getDocs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect } from 'react'
-import { collection, query, where, onSnapshot } from 'firebase/firestore'
+import { useState, useEffect, useCallback } from 'react'
+import { collection, query, where, getDocs } from 'firebase/firestore'
 import { db } from '../firebase/firebaseConfig'
 
 /**
- * @param {string | null | undefined} apoderadoRutLimpio  — rut limpio del apoderado (doc ID en /Apoderados)
- * @returns {{ cuotas: object[], loading: boolean, error: Error | null }}
+ * @param {string | null | undefined} apoderadoRutLimpio
+ * @returns {{ cuotas: object[], loading: boolean, error: Error | null, refresh: () => void }}
  */
 export function useCuotasCGPA(apoderadoRutLimpio) {
   const [cuotas, setCuotas]   = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(null)
+  const [tick, setTick]       = useState(0)
+
+  const refresh = useCallback(() => setTick(t => t + 1), [])
 
   useEffect(() => {
     if (!apoderadoRutLimpio) {
@@ -25,20 +26,19 @@ export function useCuotasCGPA(apoderadoRutLimpio) {
       return
     }
 
+    let cancelled = false
     setLoading(true)
     setError(null)
 
-    // Consulta por apoderado_id. No necesita índice compuesto porque
-    // todos los docs con apoderado_id son voluntarios por diseño.
     const q = query(
       collection(db, 'Cuotas'),
       where('apoderado_id', '==', apoderadoRutLimpio)
     )
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const data = snapshot.docs.map((d) => {
+    getDocs(q)
+      .then((snapshot) => {
+        if (cancelled) return
+        setCuotas(snapshot.docs.map((d) => {
           const f = d.data()
           return {
             id:             d.id,
@@ -51,21 +51,19 @@ export function useCuotasCGPA(apoderadoRutLimpio) {
             fechaPago:      f.fecha_pago?.toDate()  ?? null,
             fechaEnvio:     f.fecha_envio?.toDate() ?? null,
             anio:           f.anio ?? null,
-            // estudianteId es null para cuotas CGPA
           }
-        })
-        setCuotas(data)
+        }))
         setLoading(false)
-      },
-      (err) => {
-        console.error('[useCuotasCGPA] Error en onSnapshot:', err)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error('[useCuotasCGPA] Error:', err)
         setError(err)
         setLoading(false)
-      }
-    )
+      })
 
-    return () => unsubscribe()
-  }, [apoderadoRutLimpio])
+    return () => { cancelled = true }
+  }, [apoderadoRutLimpio, tick])
 
-  return { cuotas, loading, error }
+  return { cuotas, loading, error, refresh }
 }

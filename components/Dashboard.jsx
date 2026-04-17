@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { signOut }       from 'firebase/auth'
 import {
-  collection, doc, getDocs, onSnapshot, query, updateDoc, where, serverTimestamp,
+  collection, doc, getDocs, getDoc, query, updateDoc, where, serverTimestamp,
 } from 'firebase/firestore'
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage'
 import { useRouter }     from 'next/navigation'
@@ -1067,16 +1067,13 @@ export default function Dashboard() {
   const [modalMatricula2027,   setModalMatricula2027]   = useState(false)
 
   useEffect(() => {
-    const unsub = onSnapshot(
-      doc(db, 'configuracion', 'periodo_escolar'),
-      (snap) => setAdmiteMatricula2027(snap.data()?.admite_matricula_2027 ?? false),
-      ()     => {} // silenciar error de permisos en el montaje inicial
-    )
-    return () => unsub()
+    getDoc(doc(db, 'configuracion', 'periodo_escolar'))
+      .then(snap => setAdmiteMatricula2027(snap.data()?.admite_matricula_2027 ?? false))
+      .catch(() => {})
   }, [])
 
   // ── Cuotas — reactivas al alumnoActivo ────────────────────────────────────
-  const { cuotas, loading: cuotasLoading, error: cuotasError } = useCuotas(alumnoActivo)
+  const { cuotas, loading: cuotasLoading, error: cuotasError, refresh: refreshCuotas } = useCuotas(alumnoActivo)
 
   // ── Cuotas voluntarias (CGPA) — por familia, no por alumno ───────────────
   const { cuotas: cuotasCGPA, loading: cgpaLoading } = useCuotasCGPA(
@@ -1351,7 +1348,7 @@ export default function Dashboard() {
       {modalCuota && (
         <ModalTransferencia
           cuota={modalCuota}
-          onClose={() => setModalCuota(null)}
+          onClose={() => { setModalCuota(null); refreshCuotas() }}
         />
       )}
       

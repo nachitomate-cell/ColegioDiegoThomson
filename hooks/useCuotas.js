@@ -1,26 +1,38 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // hooks/useCuotas.js
-// Escucha en tiempo real las cuotas de un estudiante usando onSnapshot.
+// Carga las cuotas de un estudiante con getDocs (lectura única bajo demanda).
+// Expone refresh() para recargar manualmente — se llama tras pagar o subir
+// comprobante, y cuando la pestaña vuelve a ser visible.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect } from 'react'
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-} from 'firebase/firestore'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { collection, query, where, orderBy, getDocs } from 'firebase/firestore'
 import { db } from '../firebase/firebaseConfig'
 
 /**
  * @param {string | null | undefined} estudianteId
- * @returns {{ cuotas: object[], loading: boolean, error: Error | null }}
+ * @returns {{ cuotas: object[], loading: boolean, error: Error | null, refresh: () => void }}
  */
 export function useCuotas(estudianteId) {
   const [cuotas, setCuotas]   = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(null)
+  const [tick, setTick]       = useState(0)           // incrementar para forzar re-fetch
+  const lastFetch             = useRef(0)
+
+  const refresh = useCallback(() => setTick(t => t + 1), [])
+
+  // Recargar cuando la pestaña vuelve a estar visible (usuario regresa de Transbank)
+  useEffect(() => {
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        const elapsed = Date.now() - lastFetch.current
+        if (elapsed > 10_000) refresh()               // solo si pasaron más de 10s
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisible)
+    return () => document.removeEventListener('visibilitychange', handleVisible)
+  }, [refresh])
 
   useEffect(() => {
     if (!estudianteId) {
@@ -29,21 +41,21 @@ export function useCuotas(estudianteId) {
       return
     }
 
+    let cancelled = false
     setLoading(true)
     setError(null)
 
-    // REQUISITO: índice compuesto en Firestore Console
-    //   Colección: Cuotas | estudiante_id (ASC) + fecha_vencimiento (ASC)
-    const cuotasQuery = query(
+    const q = query(
       collection(db, 'Cuotas'),
       where('estudiante_id', '==', estudianteId),
       orderBy('fecha_vencimiento', 'asc')
     )
 
-    const unsubscribe = onSnapshot(
-      cuotasQuery,
-      (snapshot) => {
-        const data = snapshot.docs.map((docSnap) => {
+    getDocs(q)
+      .then((snapshot) => {
+        if (cancelled) return
+        lastFetch.current = Date.now()
+        setCuotas(snapshot.docs.map((docSnap) => {
           const d = docSnap.data()
           return {
             id:                  docSnap.id,
@@ -59,20 +71,18 @@ export function useCuotas(estudianteId) {
             transbank_auth_code: d.transbank_auth_code         ?? null,
             createdAt:           d.created_at?.toDate()        ?? null,
           }
-        })
-
-        setCuotas(data)
+        }))
         setLoading(false)
-      },
-      (err) => {
-        console.error('[useCuotas] Error en onSnapshot:', err)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error('[useCuotas] Error:', err)
         setError(err)
         setLoading(false)
-      }
-    )
+      })
 
-    return () => unsubscribe()
-  }, [estudianteId])
+    return () => { cancelled = true }
+  }, [estudianteId, tick])
 
-  return { cuotas, loading, error }
+  return { cuotas, loading, error, refresh }
 }
