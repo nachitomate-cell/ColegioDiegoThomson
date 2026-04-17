@@ -14,8 +14,8 @@ import { adminDb }      from '../../../../firebase/adminConfig'
 // NEXT_PUBLIC_BASE_URL tiene prioridad; si no está, Vercel provee VERCEL_URL
 // automáticamente en cada deployment (no requiere configuración manual).
 function getBaseUrl() {
-  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL
-  if (process.env.VERCEL_URL)           return `https://${process.env.VERCEL_URL}`
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL.trim()
+  if (process.env.VERCEL_URL)           return `https://${process.env.VERCEL_URL.trim()}`
   return 'http://localhost:3000'
 }
 
