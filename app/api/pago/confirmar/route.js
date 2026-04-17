@@ -39,20 +39,38 @@ async function getTx() {
   return _tx
 }
 
+// ── Commit con reintentos (Transbank puede tardar en autorizar) ───────────────
+async function commitConReintentos(tx, tokenWs, maxIntentos = 4) {
+  for (let intento = 1; intento <= maxIntentos; intento++) {
+    try {
+      console.log(`[Transbank] commit intento ${intento}/${maxIntentos} → token:`, tokenWs?.slice(0, 20))
+      const response = await tx.commit(tokenWs)
+      console.log('[Transbank] commit OK en intento', intento, '| status:', response.status)
+      return response
+    } catch (err) {
+      const is422 = err?.message?.includes('422') || err?.httpCode === 422 || err?.status === 422
+      console.warn(`[Transbank] commit intento ${intento} falló | 422:${is422} | msg:`, err?.message)
+      if (is422 && intento < maxIntentos) {
+        // Esperar antes de reintentar: 1s, 2s, 3s
+        await new Promise(r => setTimeout(r, intento * 1000))
+        continue
+      }
+      throw err
+    }
+  }
+}
+
 // ── Lógica compartida de commit ───────────────────────────────────────────────
 async function commitToken(tokenWs) {
   const base = getBaseUrl()
 
-  console.log('[Transbank] commit → token:', tokenWs?.slice(0, 20), '...')
-
   let response
   try {
     const tx = await getTx()
-    response = await tx.commit(tokenWs)
-    console.log('[Transbank] commit response:', JSON.stringify(response))
+    response = await commitConReintentos(tx, tokenWs)
+    console.log('[Transbank] commit final response:', JSON.stringify(response))
   } catch (err) {
-    // El SDK lanza TransbankError con .code y .message
-    console.error('[Transbank] commit error | code:', err?.code, '| msg:', err?.message, '| status:', err?.httpCode ?? err?.status)
+    console.error('[Transbank] commit falló todos los reintentos | msg:', err?.message)
     return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
   }
 
@@ -97,17 +115,30 @@ async function commitToken(tokenWs) {
 export async function POST(request) {
   const base = getBaseUrl()
   try {
-    let tokenWs
     const contentType = request.headers.get('content-type') ?? ''
+    const url         = new URL(request.url)
+    let tokenWs
 
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const text = await request.text()
-      tokenWs = new URLSearchParams(text).get('token_ws')
-      console.log('[/pago/confirmar POST] token_ws recibido:', tokenWs?.slice(0, 20), '...')
-    } else {
-      const body = await request.json().catch(() => ({}))
-      tokenWs = body.token_ws
-    }
+    // 1. Intentar leer del body (form-urlencoded o JSON)
+    try {
+      if (contentType.includes('application/x-www-form-urlencoded')) {
+        const text = await request.text()
+        tokenWs = new URLSearchParams(text).get('token_ws')
+      } else if (contentType.includes('multipart/form-data')) {
+        const formData = await request.formData()
+        tokenWs = formData.get('token_ws')
+      } else {
+        // Transbank a veces envía sin content-type explícito — probar texto directo
+        const text = await request.text()
+        tokenWs = new URLSearchParams(text).get('token_ws')
+          ?? JSON.parse(text || '{}').token_ws
+      }
+    } catch { /* continuar */ }
+
+    // 2. Fallback: buscar en query string (algunos redirects vienen como GET enmascarado)
+    if (!tokenWs) tokenWs = url.searchParams.get('token_ws')
+
+    console.log('[/pago/confirmar POST] contentType:', contentType, '| token_ws:', tokenWs ? tokenWs.slice(0, 20) + '...' : 'NULL')
 
     if (!tokenWs) {
       console.warn('[/pago/confirmar POST] sin token_ws → cancelado')
