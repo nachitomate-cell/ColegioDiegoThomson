@@ -35,7 +35,19 @@ export async function POST(request) {
       throw new Error('KHIPU_SECRET no está configurado en las variables de entorno.')
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+    // ── Derivar base URL desde la request (funciona en localhost y Vercel) ────
+    // NEXT_PUBLIC_BASE_URL puede estar vacía o apuntar a localhost en Vercel.
+    // Usamos los headers de la request como fuente de verdad.
+    const envUrl  = (process.env.NEXT_PUBLIC_BASE_URL || '').trim()
+    const esLocal = envUrl.includes('localhost') || envUrl.includes('127.0.0.1') || envUrl === ''
+    let baseUrl
+    if (esLocal) {
+      const host  = request.headers.get('x-forwarded-host') || request.headers.get('host') || 'localhost:3000'
+      const proto = request.headers.get('x-forwarded-proto') || 'http'
+      baseUrl = `${proto}://${host}`
+    } else {
+      baseUrl = envUrl
+    }
 
     // ── Construir asunto según tipo de cuota ──────────────────────────────────
     let subject
@@ -56,8 +68,7 @@ export async function POST(request) {
 
     // ── Llamar API Khipu v3 ───────────────────────────────────────────────────
     // notify_url solo se incluye si la URL es pública (no localhost).
-    // En desarrollo Khipu rechaza localhost con "Error de validación".
-    const esLocal = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')
+    const esLocalUrl = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')
 
     const body = {
       subject,
@@ -66,7 +77,7 @@ export async function POST(request) {
       transaction_id: cuotaId,
       return_url:     `${baseUrl}/pago/resultado?success=true&khipu=true&cuotaId=${cuotaId}`,
       cancel_url:     `${baseUrl}/pago/resultado?success=false&motivo=cancelado&khipu=true`,
-      ...(!esLocal ? { notify_url: `${baseUrl}/api/khipu/confirmar` } : {}),
+      ...(!esLocalUrl ? { notify_url: `${baseUrl}/api/khipu/confirmar` } : {}),
       // bank_id es opcional: si el apoderado ya eligió su banco en el portal,
       // Khipu salta la pantalla de selección de banco y va directo al pago.
       ...(bankId ? { bank_id: bankId } : {}),

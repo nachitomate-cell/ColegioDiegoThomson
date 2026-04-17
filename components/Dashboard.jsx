@@ -1117,38 +1117,36 @@ export default function Dashboard() {
       }
 
       if (metodo === 'khipu') {
-        // Khipu: mostrar pago en modal usando la biblioteca JS oficial
-        if (!khipuScriptListo || typeof window.Khipu === 'undefined') {
-          alert('La biblioteca de Khipu aún está cargando. Espera un momento e intenta nuevamente.')
-          setPagoEnProceso(null)
-          return
-        }
-
-        const khipu = new window.Khipu()
-        khipu.startOperation(
-          data.payment_id,
-          (result) => {
-            console.log('[Khipu] callback:', result)
-            setPagoEnProceso(null)
-            if (result.result === 'ok') {
-              // Pago exitoso → refrescar cuotas
-              refreshCuotas()
-            }
-            // En cancel/error no hacemos nada; el modal ya se cerró solo
-          },
-          {
-            mountElement: document.getElementById('khenshin-web-root'),
-            modal: true,
-            modalOptions: { maxWidth: 450, maxHeight: 860 },
-            options: {
-              style: {
-                primaryColor: '#8347AD',
-                fontFamily:   'Roboto',
-              },
-              skipExitPage: false,
+        // Khipu: mostrar pago en modal si el SDK está disponible,
+        // si no redirigir directamente a payment_url (fallback).
+        if (khipuScriptListo && typeof window.Khipu !== 'undefined') {
+          const khipu = new window.Khipu()
+          khipu.startOperation(
+            data.payment_id,
+            (result) => {
+              console.log('[Khipu] callback:', result)
+              setPagoEnProceso(null)
+              if (result.result === 'ok') {
+                refreshCuotas()
+              }
             },
-          }
-        )
+            {
+              mountElement: document.getElementById('khenshin-web-root'),
+              modal: true,
+              modalOptions: { maxWidth: 450, maxHeight: 860 },
+              options: {
+                style: {
+                  primaryColor: '#8347AD',
+                  fontFamily:   'Roboto',
+                },
+                skipExitPage: false,
+              },
+            }
+          )
+        } else {
+          // Fallback: redirigir a la URL de pago de Khipu
+          window.location.href = data.payment_url
+        }
       } else {
         // Transbank requiere form POST
         const form = document.createElement('form')
