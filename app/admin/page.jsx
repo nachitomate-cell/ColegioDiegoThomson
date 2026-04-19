@@ -6,12 +6,15 @@ import {
   doc, updateDoc, getDoc, setDoc, serverTimestamp, Timestamp, writeBatch,
 } from 'firebase/firestore'
 import { signOut, createUserWithEmailAndPassword } from 'firebase/auth'
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage'
 import { useRouter } from 'next/navigation'
-import { db, auth } from '../../firebase/firebaseConfig'
-import { useAuth }   from '../../hooks/useAuth'
+import { db, auth, storage } from '../../firebase/firebaseConfig'
+import { useAuth }            from '../../hooks/useAuth'
 import { exportarCuotasExcel, exportarApoderadosExcel } from '../../lib/exportarExcel'
-import { LOGO_SRC } from '../../lib/logo'
-import { normalizar } from '../../lib/utils'
+import { generarReciboPDF }  from '../../lib/generarReciboPDF'
+import { LOGO_SRC }          from '../../lib/logo'
+import { normalizar }        from '../../lib/utils'
+import { toast }             from 'sonner'
 import ModalRegistrarEstudiante from '../../components/StudentRegistrationForm'
 
 
@@ -196,15 +199,29 @@ function ModalComprobante({ url, onClose }) {
 // ─── FILA DE CUOTA (REVISIÓN) ─────────────────────────────────────────────────
 
 function FilaCuotaRevision({ cuota, nombreEstudiante, onVerComprobante, onAprobar, onRechazar }) {
-  const [confirmando, setConfirmando] = useState(null)
-  const [procesando, setProcesando]   = useState(false)
+  const [confirmando,       setConfirmando]       = useState(null)
+  const [procesando,        setProcesando]        = useState(false)
+  const [motivoRechazo,     setMotivoRechazo]     = useState('')
+  const [errorFila,         setErrorFila]         = useState(null)
 
   const handleAccion = async (accion) => {
-    if (confirmando !== accion) { setConfirmando(accion); return }
+    // Primer clic: pedir confirmación (y motivo si es rechazo)
+    if (confirmando !== accion) { setConfirmando(accion); setMotivoRechazo(''); setErrorFila(null); return }
+    // Segundo clic: ejecutar
     setProcesando(true)
+    setErrorFila(null)
     try {
-      accion === 'aprobar' ? await onAprobar(cuota.id) : await onRechazar(cuota.id)
-    } finally { setProcesando(false); setConfirmando(null) }
+      if (accion === 'aprobar') {
+        await onAprobar(cuota.id)
+      } else {
+        await onRechazar(cuota.id, motivoRechazo)
+      }
+    } catch (err) {
+      setErrorFila(err.message || 'Error al procesar')
+    } finally {
+      setProcesando(false)
+      setConfirmando(null)
+    }
   }
 
   return (
@@ -223,24 +240,48 @@ function FilaCuotaRevision({ cuota, nombreEstudiante, onVerComprobante, onAproba
         ) : <span className="text-ink-muted text-sm">—</span>}
       </td>
       <td className="px-4 py-3.5">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <button onClick={() => onVerComprobante(cuota.comprobanteUrl)} disabled={!cuota.comprobanteUrl || procesando} className="text-xs bg-surface-600 hover:bg-surface-500 text-ink-secondary px-2.5 py-1.5 rounded-md border border-surface-400 transition-colors disabled:opacity-40">Ver</button>
-          {confirmando === 'aprobar' ? (
-            <div className="flex items-center gap-1">
-              <button onClick={() => handleAccion('aprobar')} disabled={procesando} className="text-xs bg-paid text-white px-2.5 py-1.5 rounded-md font-semibold">{procesando ? '…' : '¿Aprobar?'}</button>
-              <button onClick={() => setConfirmando(null)} className="text-xs bg-surface-600 text-ink-muted px-2 py-1.5 rounded-md border border-surface-400">✕</button>
-            </div>
-          ) : (
-            <button onClick={() => handleAccion('aprobar')} disabled={procesando} className="text-xs bg-paid-bg hover:bg-paid text-paid hover:text-white px-2.5 py-1.5 rounded-md border border-paid-border font-medium transition-all disabled:opacity-40">Aprobar</button>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button onClick={() => onVerComprobante(cuota.comprobanteUrl)} disabled={!cuota.comprobanteUrl || procesando} className="text-xs bg-surface-600 hover:bg-surface-500 text-ink-secondary px-2.5 py-1.5 rounded-md border border-surface-400 transition-colors disabled:opacity-40">Ver</button>
+
+            {/* Aprobar */}
+            {confirmando === 'aprobar' ? (
+              <div className="flex items-center gap-1">
+                <button onClick={() => handleAccion('aprobar')} disabled={procesando} className="text-xs bg-paid text-white px-2.5 py-1.5 rounded-md font-semibold">
+                  {procesando ? '…' : '¿Confirmar?'}
+                </button>
+                <button onClick={() => setConfirmando(null)} disabled={procesando} className="text-xs bg-surface-600 text-ink-muted px-2 py-1.5 rounded-md border border-surface-400">✕</button>
+              </div>
+            ) : (
+              <button onClick={() => handleAccion('aprobar')} disabled={procesando || confirmando === 'rechazar'} className="text-xs bg-paid-bg hover:bg-paid text-paid hover:text-white px-2.5 py-1.5 rounded-md border border-paid-border font-medium transition-all disabled:opacity-40">Aprobar</button>
+            )}
+
+            {/* Rechazar */}
+            {confirmando === 'rechazar' ? (
+              <div className="flex items-center gap-1">
+                <button onClick={() => handleAccion('rechazar')} disabled={procesando} className="text-xs bg-overdue text-white px-2.5 py-1.5 rounded-md font-semibold">
+                  {procesando ? '…' : '¿Confirmar?'}
+                </button>
+                <button onClick={() => setConfirmando(null)} disabled={procesando} className="text-xs bg-surface-600 text-ink-muted px-2 py-1.5 rounded-md border border-surface-400">✕</button>
+              </div>
+            ) : (
+              <button onClick={() => handleAccion('rechazar')} disabled={procesando || confirmando === 'aprobar'} className="text-xs bg-overdue-bg hover:bg-overdue text-overdue hover:text-white px-2.5 py-1.5 rounded-md border border-overdue-border font-medium transition-all disabled:opacity-40">Rechazar</button>
+            )}
+          </div>
+
+          {/* Textarea de motivo de rechazo */}
+          {confirmando === 'rechazar' && (
+            <textarea
+              value={motivoRechazo}
+              onChange={(e) => setMotivoRechazo(e.target.value)}
+              placeholder="Motivo del rechazo (opcional)..."
+              rows={2}
+              className="w-full text-xs border border-surface-400 rounded-md px-2 py-1.5 text-ink-primary placeholder:text-ink-disabled focus:outline-none focus:border-overdue resize-none"
+            />
           )}
-          {confirmando === 'rechazar' ? (
-            <div className="flex items-center gap-1">
-              <button onClick={() => handleAccion('rechazar')} disabled={procesando} className="text-xs bg-overdue text-white px-2.5 py-1.5 rounded-md font-semibold">{procesando ? '…' : '¿Rechazar?'}</button>
-              <button onClick={() => setConfirmando(null)} className="text-xs bg-surface-600 text-ink-muted px-2 py-1.5 rounded-md border border-surface-400">✕</button>
-            </div>
-          ) : (
-            <button onClick={() => handleAccion('rechazar')} disabled={procesando} className="text-xs bg-overdue-bg hover:bg-overdue text-overdue hover:text-white px-2.5 py-1.5 rounded-md border border-overdue-border font-medium transition-all disabled:opacity-40">Rechazar</button>
-          )}
+
+          {/* Error inline */}
+          {errorFila && <p className="text-overdue text-xs">{errorFila}</p>}
         </div>
       </td>
     </tr>
@@ -602,6 +643,286 @@ function ModalEditarEstudiante({ estudiante, onClose, onSaved }) {
 }
 
 
+// ─── MODAL CONFIRMAR PAGO MANUAL ─────────────────────────────────────────────
+
+const MEDIOS_PAGO = [
+  { value: 'transferencia',   label: 'Transferencia bancaria' },
+  { value: 'efectivo',        label: 'Efectivo' },
+  { value: 'cheque',          label: 'Cheque' },
+  { value: 'webpay_diferido', label: 'Webpay (confirmación diferida)' },
+  { value: 'khipu_diferido',  label: 'Khipu (confirmación diferida)' },
+  { value: 'otro',            label: 'Otro' },
+]
+
+function ModalConfirmarPagoManual({ cuota, nombreEstudiante, estudianteData, onClose, onConfirmado }) {
+  const [medioPago,          setMedioPago]          = useState('')
+  const [fechaPago,          setFechaPago]          = useState(new Date().toISOString().split('T')[0])
+  const [numeroComprobante,  setNumeroComprobante]  = useState('')
+  const [observacion,        setObservacion]        = useState('')
+  const [archivo,            setArchivo]            = useState(null)
+  const [archivoError,       setArchivoError]       = useState(null)
+  const [progreso,           setProgreso]           = useState(0)
+  const [enviando,           setEnviando]           = useState(false)
+  const [errorLocal,         setErrorLocal]         = useState(null)
+
+  const requiereComprobante = medioPago && medioPago !== 'efectivo'
+  const observacionOk       = observacion.trim().length >= 10
+  const formValido = (
+    medioPago &&
+    fechaPago &&
+    observacionOk &&
+    (!requiereComprobante || numeroComprobante.trim())
+  )
+
+  const handleArchivo = (e) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    if (f.size > 5 * 1024 * 1024) { setArchivoError('Máx. 5 MB'); return }
+    if (!f.type.match(/image\/.*|application\/pdf/)) { setArchivoError('Solo imagen o PDF'); return }
+    setArchivoError(null)
+    setArchivo(f)
+  }
+
+  const handleSubmit = async () => {
+    if (!formValido || enviando) return
+    setEnviando(true)
+    setErrorLocal(null)
+    try {
+      // 1. Subir comprobante si se adjuntó
+      let comprobanteUrl = null
+      if (archivo) {
+        const timestamp  = Date.now()
+        const storageRef = ref(storage, `comprobantes-manuales/${cuota.id}/${timestamp}-${archivo.name}`)
+        await new Promise((resolve, reject) => {
+          const task = uploadBytesResumable(storageRef, archivo, { contentType: archivo.type })
+          task.on(
+            'state_changed',
+            (snap) => setProgreso(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+            reject,
+            () => resolve(task.snapshot),
+          )
+        })
+        comprobanteUrl = await getDownloadURL(storageRef)
+      }
+
+      // 2. Llamar API route
+      const token = await auth.currentUser.getIdToken()
+      const res   = await fetch('/api/admin/confirmar-pago-manual', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          cuota_id:               cuota.id,
+          medio_pago:             medioPago,
+          fecha_pago:             fechaPago,
+          numero_comprobante:     numeroComprobante.trim() || null,
+          observacion:            observacion.trim(),
+          comprobante_manual_url: comprobanteUrl,
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Error al confirmar el pago')
+      }
+
+      // 3. Generar recibo PDF en el navegador
+      try {
+        generarReciboPDF({
+          nombreEstudiante: nombreEstudiante ?? '—',
+          curso:            estudianteData?.curso            ?? '—',
+          nombreApoderado:  estudianteData?.apoderado_nombre ?? '—',
+          rutApoderado:     estudianteData?.apoderado_rut    ?? estudianteData?.rut ?? '—',
+          mes:              cuota.mes,
+          anio:             cuota.anio,
+          monto:            cuota.monto,
+          fechaPago:        new Date(fechaPago + 'T12:00:00'),
+          codigoAutorizacion: numeroComprobante.trim() || null,
+          cuotaId:          cuota.id,
+        })
+      } catch (pdfErr) {
+        console.warn('[ModalConfirmarPago] Error generando PDF (no crítico):', pdfErr)
+      }
+
+      toast.success('Pago confirmado', {
+        description: 'La cuota fue marcada como pagada y se descargó el recibo.',
+      })
+      onConfirmado(cuota.id)
+      onClose()
+    } catch (err) {
+      setErrorLocal(err.message || 'Error al procesar')
+    } finally {
+      setEnviando(false)
+      setProgreso(0)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
+      onClick={(e) => e.target === e.currentTarget && !enviando && onClose()}
+    >
+      <div className="bg-white border border-surface-400 rounded-2xl shadow-card-lg w-full max-w-lg max-h-[92vh] flex flex-col animate-slide-up">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-500 flex-shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2 h-2 rounded-full bg-paid" />
+            <h2 className="text-ink-primary font-semibold text-sm">Confirmar pago manual</h2>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={enviando}
+            className="text-ink-muted hover:text-ink-primary text-xl leading-none w-7 h-7 flex items-center justify-center"
+          >×</button>
+        </div>
+
+        {/* Datos de la cuota */}
+        <div className="px-6 py-3 bg-surface-800 border-b border-surface-500 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-ink-primary text-sm font-semibold">{cuota.mes} {cuota.anio}</p>
+              <p className="text-ink-muted text-xs">{nombreEstudiante ?? '—'}</p>
+            </div>
+            <p className="text-ink-primary text-base font-bold font-mono">{formatCLP(cuota.monto)}</p>
+          </div>
+        </div>
+
+        {/* Formulario */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+
+          {/* Medio de pago */}
+          <div>
+            <label className="block text-xs font-semibold text-ink-secondary mb-1.5">
+              Medio de pago <span className="text-overdue">*</span>
+            </label>
+            <select
+              value={medioPago}
+              onChange={(e) => setMedioPago(e.target.value)}
+              disabled={enviando}
+              className="w-full bg-white border border-surface-400 rounded-lg px-3 py-2.5 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-50"
+            >
+              <option value="">Seleccionar medio de pago...</option>
+              {MEDIOS_PAGO.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Fecha de pago */}
+          <div>
+            <label className="block text-xs font-semibold text-ink-secondary mb-1.5">
+              Fecha de pago real <span className="text-overdue">*</span>
+            </label>
+            <input
+              type="date"
+              value={fechaPago}
+              max={new Date().toISOString().split('T')[0]}
+              onChange={(e) => setFechaPago(e.target.value)}
+              disabled={enviando}
+              className="w-full bg-white border border-surface-400 rounded-lg px-3 py-2.5 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-50"
+            />
+          </div>
+
+          {/* N° comprobante (obligatorio excepto efectivo) */}
+          <div>
+            <label className="block text-xs font-semibold text-ink-secondary mb-1.5">
+              N° de comprobante / referencia
+              {requiereComprobante && <span className="text-overdue"> *</span>}
+              {!requiereComprobante && medioPago === 'efectivo' && (
+                <span className="ml-1 text-ink-disabled font-normal">(no requerido para efectivo)</span>
+              )}
+            </label>
+            <input
+              type="text"
+              value={numeroComprobante}
+              onChange={(e) => setNumeroComprobante(e.target.value)}
+              disabled={enviando}
+              placeholder={medioPago === 'transferencia' ? 'Ej: 12345678' : medioPago === 'cheque' ? 'Folio del cheque' : 'Referencia / código'}
+              className="w-full bg-white border border-surface-400 rounded-lg px-3 py-2.5 text-sm text-ink-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-50"
+            />
+          </div>
+
+          {/* Observación */}
+          <div>
+            <label className="block text-xs font-semibold text-ink-secondary mb-1.5">
+              Observación <span className="text-overdue">*</span>
+              <span className={`ml-1 font-normal ${observacion.trim().length < 10 ? 'text-ink-disabled' : 'text-paid'}`}>
+                ({observacion.trim().length}/10 mín.)
+              </span>
+            </label>
+            <textarea
+              value={observacion}
+              onChange={(e) => setObservacion(e.target.value)}
+              disabled={enviando}
+              rows={3}
+              placeholder="Ej: Apoderado pagó en efectivo el 15-abr en secretaría. Recibido por Daniela Rojas."
+              className="w-full bg-white border border-surface-400 rounded-lg px-3 py-2.5 text-sm text-ink-primary placeholder:text-ink-disabled focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all resize-none disabled:opacity-50"
+            />
+          </div>
+
+          {/* Comprobante adjunto (opcional) */}
+          <div>
+            <label className="block text-xs font-semibold text-ink-secondary mb-1.5">
+              Adjuntar comprobante <span className="text-ink-disabled font-normal">(opcional · imagen o PDF · max 5 MB)</span>
+            </label>
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              onChange={handleArchivo}
+              disabled={enviando}
+              className="w-full text-xs text-ink-secondary file:mr-3 file:text-xs file:font-medium file:bg-surface-600 file:border file:border-surface-400 file:rounded-md file:px-3 file:py-1.5 file:text-ink-secondary hover:file:bg-surface-500 file:cursor-pointer cursor-pointer disabled:opacity-50"
+            />
+            {archivoError && <p className="text-overdue text-xs mt-1">{archivoError}</p>}
+            {archivo && !archivoError && (
+              <p className="text-paid text-xs mt-1">✓ {archivo.name} ({(archivo.size / 1024).toFixed(0)} KB)</p>
+            )}
+          </div>
+
+          {/* Barra de progreso upload */}
+          {enviando && archivo && progreso > 0 && progreso < 100 && (
+            <div>
+              <p className="text-ink-muted text-xs mb-1">Subiendo comprobante... {progreso}%</p>
+              <div className="w-full bg-surface-500 rounded-full h-1.5">
+                <div className="bg-accent h-1.5 rounded-full transition-all" style={{ width: `${progreso}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {errorLocal && (
+            <div className="bg-overdue-bg border border-overdue-border rounded-lg px-4 py-3">
+              <p className="text-overdue text-sm font-medium">{errorLocal}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Botones */}
+        <div className="flex gap-3 px-6 py-4 border-t border-surface-500 flex-shrink-0">
+          <button
+            onClick={onClose}
+            disabled={enviando}
+            className="flex-1 py-2.5 rounded-lg text-sm font-medium text-ink-secondary bg-surface-700 hover:bg-surface-600 border border-surface-400 transition-colors disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!formValido || enviando}
+            className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-white bg-paid hover:bg-paid/90 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98]"
+          >
+            {enviando ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Confirmando...
+              </span>
+            ) : 'Confirmar pago'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PÁGINA PRINCIPAL DEL ADMIN
 // ═════════════════════════════════════════════════════════════════════════════
@@ -612,6 +933,7 @@ export default function AdminPage() {
 
   const [esAdmin, setEsAdmin]           = useState(false)
   const [adminChecked, setAdminChecked] = useState(false)
+  const [rolEfectivo, setRolEfectivo]   = useState(null) // 'admin' | 'secretaria'
 
   // ── Estado global ──────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]           = useState('revision')
@@ -640,6 +962,13 @@ export default function AdminPage() {
   const [modalUrl, setModalUrl]               = useState(null)
   const [modalRegistrar, setModalRegistrar]   = useState(false)
   const [estudianteEditando, setEstudianteEditando] = useState(null)
+  // Modal de confirmación manual de pago
+  const [cuotaConfirmando, setCuotaConfirmando] = useState(null)
+
+  // ── Filtros del tab Pagos Manuales ────────────────────────────────────────
+  const [busquedaManual,    setBusquedaManual]    = useState('')
+  const [filtroMesManual,   setFiltroMesManual]   = useState('')
+  const [currentPageManual, setCurrentPageManual] = useState(1)
   const [enviandoRecordatorio, setEnviandoRecordatorio] = useState(false)
   const [recordatorioEnviado, setRecordatorioEnviado]   = useState(false)
 
@@ -649,12 +978,30 @@ export default function AdminPage() {
   const [error, setError] = useState(null)
 
   // ── Auth check ──────────────────────────────────────────────────────────────
+  // Acepta: doc en /Admins/{uid} (admin legacy) O custom claim role='admin'/'secretaria'
   useEffect(() => {
     if (authLoading) return
     if (!user) { router.push('/login'); return }
-    getDoc(doc(db, 'Admins', user.uid)).then((snap) => {
-      setEsAdmin(snap.exists())
+    Promise.all([
+      getDoc(doc(db, 'Admins', user.uid)),
+      user.getIdTokenResult(),
+    ]).then(([adminSnap, tokenResult]) => {
+      const claim = tokenResult.claims?.role
+      let rol = null
+      if (adminSnap.exists() || claim === 'admin') rol = 'admin'
+      else if (claim === 'secretaria')              rol = 'secretaria'
+
+      setRolEfectivo(rol)
+      setEsAdmin(rol !== null)   // cualquier rol válido habilita el panel
       setAdminChecked(true)
+    }).catch(() => {
+      // fallback: solo chequeo de Admins
+      getDoc(doc(db, 'Admins', user.uid)).then((snap) => {
+        const rol = snap.exists() ? 'admin' : null
+        setRolEfectivo(rol)
+        setEsAdmin(rol !== null)
+        setAdminChecked(true)
+      })
     })
   }, [user, authLoading, router])
 
@@ -741,18 +1088,46 @@ export default function AdminPage() {
     return () => unsub()
   }, [esAdmin])
 
-  // ── Acciones ───────────────────────────────────────────────────────────────
+  // ── Mapa completo de estudiantes (id → doc completo) para pagos manuales ──
+  const estudiantesFullMap = useMemo(() => {
+    const map = {}
+    listaEstudiantes.forEach((e) => { map[e.id] = e })
+    return map
+  }, [listaEstudiantes])
+
+  // ── Acciones: Aprobar / Rechazar comprobantes en revisión (vía API) ────────
   const handleAprobar = async (cuotaId) => {
-    await updateDoc(doc(db, 'Cuotas', cuotaId), {
-      estado: 'pagado', fecha_pago: serverTimestamp(),
-      aprobado_por: user.uid, aprobado_nombre: user.email?.split('@')[0] ?? 'admin',
+    const token = await auth.currentUser.getIdToken()
+    const res   = await fetch('/api/admin/procesar-revision', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body:    JSON.stringify({ cuota_id: cuotaId, accion: 'aprobar' }),
     })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      throw new Error(d.error || 'Error al aprobar')
+    }
   }
-  const handleRechazar = async (cuotaId) => {
-    await updateDoc(doc(db, 'Cuotas', cuotaId), {
-      estado: 'pendiente', comprobante_url: null, fecha_envio: null,
+
+  const handleRechazar = async (cuotaId, observacion = '') => {
+    const token = await auth.currentUser.getIdToken()
+    const res   = await fetch('/api/admin/procesar-revision', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body:    JSON.stringify({ cuota_id: cuotaId, accion: 'rechazar', observacion }),
     })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      throw new Error(d.error || 'Error al rechazar')
+    }
   }
+
+  // ── Acción: Confirmar pago manual (callback del modal) ────────────────────
+  const handlePagoManualConfirmado = useCallback((cuotaId) => {
+    // Forzar recarga de todas las cuotas para reflejar el nuevo estado
+    cargarTodasCuotas()
+    setCuotaConfirmando(null)
+  }, [cargarTodasCuotas])
 
   // ── Recordatorio masivo ────────────────────────────────────────────────────
   const handleRecordatorioMasivo = async () => {
@@ -838,6 +1213,35 @@ export default function AdminPage() {
   // ── Reset de página al cambiar filtros ─────────────────────────────────────
   useEffect(() => { setCurrentPage(1) }, [filtroEstado, busqueda])
 
+  // ── Filtro de cuotas para el tab "Pagos manuales" ─────────────────────────
+  // Solo pendiente + atrasado, EXCLUYE en_revision y pagado.
+  const cuotasManualesFiltradas = useMemo(() => {
+    let lista = todasCuotas.filter((c) => ['pendiente', 'atrasado'].includes(c.estado))
+    if (filtroMesManual) {
+      lista = lista.filter((c) => c.mes === filtroMesManual)
+    }
+    if (busquedaManual.trim()) {
+      const q = normalizar(busquedaManual)
+      lista = lista.filter((c) => {
+        const nombre      = normalizar(estudiantesMap[c.estudianteId])
+        const apoderado   = normalizar(estudiantesFullMap[c.estudianteId]?.apoderado_nombre)
+        const rutApo      = normalizar(estudiantesFullMap[c.estudianteId]?.apoderado_rut_limpio
+                                      ?? estudiantesFullMap[c.estudianteId]?.apoderado_rut)
+        return nombre.includes(q) || apoderado.includes(q) || rutApo.includes(q)
+      })
+    }
+    // Más atrasadas primero (vencimiento ascendente)
+    lista.sort((a, b) => (a.fechaVencimiento ?? 0) - (b.fechaVencimiento ?? 0))
+    return lista
+  }, [todasCuotas, filtroMesManual, busquedaManual, estudiantesMap, estudiantesFullMap])
+
+  const totalPagesManual     = Math.max(1, Math.ceil(cuotasManualesFiltradas.length / ITEMS_PER_PAGE))
+  const cuotasManualesPagina = cuotasManualesFiltradas.slice(
+    (currentPageManual - 1) * ITEMS_PER_PAGE,
+    currentPageManual * ITEMS_PER_PAGE,
+  )
+  useEffect(() => { setCurrentPageManual(1) }, [filtroMesManual, busquedaManual])
+
   // ── Paginación ─────────────────────────────────────────────────────────────
   const totalPages       = Math.max(1, Math.ceil(cuotasFiltradas.length / ITEMS_PER_PAGE))
   const cuotasPaginadas  = cuotasFiltradas.slice(
@@ -887,12 +1291,16 @@ export default function AdminPage() {
   // RENDER PRINCIPAL
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Secretaria solo ve: Pagos manuales + Comprobantes + (sin Estudiantes, sin KPIs globales)
   const tabItems = [
-    { id: 'revision',      label: 'Comprobantes',    count: stats.enRevision },
-    { id: 'todas',         label: 'Todas las cuotas', count: stats.total },
-    { id: 'apoderados',    label: 'Estudiantes',     count: listaEstudiantes.length },
-    { id: 'resumen',       label: 'Resumen financiero' },
-    { id: 'configuracion', label: 'Configuración' },
+    { id: 'revision',        label: 'Comprobantes',      count: stats.enRevision },
+    { id: 'pagos_manuales',  label: 'Pagos manuales',    count: cuotasManualesFiltradas.length },
+    ...(rolEfectivo === 'admin' ? [
+      { id: 'todas',         label: 'Todas las cuotas',  count: stats.total },
+      { id: 'apoderados',    label: 'Estudiantes',       count: listaEstudiantes.length },
+      { id: 'resumen',       label: 'Resumen financiero' },
+      { id: 'configuracion', label: 'Configuración' },
+    ] : []),
   ]
 
   return (
@@ -912,7 +1320,12 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs bg-accent-bg text-accent-hover border border-accent-border px-2.5 py-1 rounded-full font-medium">Admin</span>
+            <span className={`text-xs px-2.5 py-1 rounded-full font-medium border
+              ${rolEfectivo === 'secretaria'
+                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                : 'bg-accent-bg text-accent-hover border-accent-border'}`}>
+              {rolEfectivo === 'secretaria' ? 'Secretaría' : 'Admin'}
+            </span>
             <button
               onClick={() => signOut(auth).then(() => router.push('/login'))}
               title="Cerrar sesión"
@@ -1045,6 +1458,145 @@ export default function AdminPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+          </>
+        )}
+
+
+        {/* ── TAB: PAGOS MANUALES ───────────────────────────────────────── */}
+        {activeTab === 'pagos_manuales' && (
+          <>
+            {/* Filtros */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
+              {/* Filtro por mes */}
+              <select
+                value={filtroMesManual}
+                onChange={(e) => setFiltroMesManual(e.target.value)}
+                className="bg-white border border-surface-400 rounded-lg px-3 py-2 text-sm text-ink-primary focus:outline-none focus:border-accent transition-all"
+              >
+                <option value="">Todos los meses</option>
+                {MESES.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+
+              {/* Búsqueda */}
+              <div className="flex-1 min-w-[200px]">
+                <SearchBar
+                  value={busquedaManual}
+                  onChange={setBusquedaManual}
+                  placeholder="Buscar por estudiante, apoderado o RUT..."
+                />
+              </div>
+
+              {/* Botón refrescar */}
+              <button
+                onClick={cargarTodasCuotas}
+                disabled={loadingTodas}
+                title="Actualizar lista"
+                className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink-primary bg-white border border-surface-400 px-3 py-2 rounded-lg transition-all disabled:opacity-50 whitespace-nowrap"
+              >
+                <svg className={`w-3.5 h-3.5 ${loadingTodas ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Actualizar
+              </button>
+            </div>
+
+            {loadingTodas ? (
+              <div className="bg-white border border-surface-500 rounded-xl p-12 flex items-center justify-center">
+                <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : cuotasManualesFiltradas.length === 0 ? (
+              <div className="bg-white border border-surface-500 rounded-xl p-16 flex flex-col items-center gap-4 shadow-card">
+                <div className="w-16 h-16 rounded-full bg-paid-bg border border-paid-border flex items-center justify-center">
+                  <span className="text-paid text-3xl">✓</span>
+                </div>
+                <p className="text-ink-primary font-semibold">Sin cuotas pendientes</p>
+                <p className="text-ink-muted text-sm">No hay cuotas pendientes o atrasadas{filtroMesManual ? ` en ${filtroMesManual}` : ''}.</p>
+              </div>
+            ) : (
+              <div className="bg-white border border-surface-500 rounded-xl overflow-hidden shadow-card">
+                <div className="px-5 py-4 border-b border-surface-500 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-ink-primary font-semibold text-base">Cuotas pendientes de pago</h2>
+                    <p className="text-ink-muted text-xs mt-0.5">
+                      {cuotasManualesFiltradas.length} cuota{cuotasManualesFiltradas.length !== 1 ? 's' : ''} ·
+                      solo estados <span className="font-medium">pendiente</span> y <span className="font-medium text-overdue">atrasado</span>
+                    </p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-surface-500 bg-surface-800">
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Cuota</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Estudiante</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden lg:table-cell">Apoderado</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Monto</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Vencimiento</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider hidden md:table-cell">Atraso</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Estado</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-ink-muted uppercase tracking-wider">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cuotasManualesPagina.map((c) => {
+                        const estData    = estudiantesFullMap[c.estudianteId]
+                        const diasAtraso = c.fechaVencimiento
+                          ? Math.max(0, Math.floor((new Date() - c.fechaVencimiento) / 86400000))
+                          : null
+                        return (
+                          <tr key={c.id} className="border-b border-surface-500 hover:bg-surface-600/50 transition-colors">
+                            <td className="px-4 py-3.5 text-ink-primary text-sm font-medium whitespace-nowrap">{c.mes} {c.anio}</td>
+                            <td className="px-4 py-3.5 text-ink-primary text-sm">
+                              {estudiantesMap[c.estudianteId] ?? <Sk className="w-24 h-4 inline-block" />}
+                              {estData?.curso && <p className="text-ink-muted text-xs">{estData.curso}</p>}
+                            </td>
+                            <td className="px-4 py-3.5 hidden lg:table-cell">
+                              <p className="text-ink-secondary text-sm">{estData?.apoderado_nombre ?? '—'}</p>
+                              <p className="text-ink-muted text-xs font-mono">{estData?.apoderado_rut ?? estData?.apoderado_rut_limpio ?? '—'}</p>
+                            </td>
+                            <td className="px-4 py-3.5 text-ink-secondary text-sm font-mono whitespace-nowrap">{formatCLP(c.monto)}</td>
+                            <td className="px-4 py-3.5 text-ink-secondary text-sm hidden md:table-cell whitespace-nowrap">{formatFecha(c.fechaVencimiento)}</td>
+                            <td className="px-4 py-3.5 hidden md:table-cell">
+                              {diasAtraso !== null && diasAtraso > 0
+                                ? <span className="text-overdue text-sm font-semibold">{diasAtraso}d</span>
+                                : <span className="text-ink-disabled text-sm">—</span>
+                              }
+                            </td>
+                            <td className="px-4 py-3.5"><EstadoBadge estado={c.estado} /></td>
+                            <td className="px-4 py-3.5">
+                              <button
+                                onClick={() => setCuotaConfirmando(c)}
+                                className="text-xs bg-paid-bg hover:bg-paid text-paid hover:text-white px-3 py-1.5 rounded-md border border-paid-border font-medium transition-all whitespace-nowrap"
+                              >
+                                Confirmar pago
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Paginación */}
+                {totalPagesManual > 1 && (
+                  <div className="flex items-center justify-between px-5 py-3 border-t border-surface-500 bg-surface-800/40">
+                    <button
+                      onClick={() => setCurrentPageManual((p) => Math.max(1, p - 1))}
+                      disabled={currentPageManual === 1}
+                      className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-surface-400 bg-white text-ink-secondary hover:bg-surface-600 transition-colors disabled:opacity-40"
+                    >← Anterior</button>
+                    <span className="text-xs text-ink-muted">
+                      Página <span className="font-semibold text-ink-primary">{currentPageManual}</span> de <span className="font-semibold text-ink-primary">{totalPagesManual}</span>
+                    </span>
+                    <button
+                      onClick={() => setCurrentPageManual((p) => Math.min(totalPagesManual, p + 1))}
+                      disabled={currentPageManual === totalPagesManual}
+                      className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-surface-400 bg-white text-ink-secondary hover:bg-surface-600 transition-colors disabled:opacity-40"
+                    >Siguiente →</button>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -1371,6 +1923,15 @@ export default function AdminPage() {
           estudiante={estudianteEditando}
           onClose={() => setEstudianteEditando(null)}
           onSaved={() => setEstudianteEditando(null)}
+        />
+      )}
+      {cuotaConfirmando && (
+        <ModalConfirmarPagoManual
+          cuota={cuotaConfirmando}
+          nombreEstudiante={estudiantesMap[cuotaConfirmando.estudianteId]}
+          estudianteData={estudiantesFullMap[cuotaConfirmando.estudianteId]}
+          onClose={() => setCuotaConfirmando(null)}
+          onConfirmado={handlePagoManualConfirmado}
         />
       )}
 
