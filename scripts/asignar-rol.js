@@ -29,7 +29,10 @@ if (!admin.apps.length) {
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       credential = admin.credential.applicationDefault()
     } else {
-      const keyPath = path.join(__dirname, 'serviceAccountKey.json')
+      // Acepta tanto serviceAccountKey.json como serviceAccountKey.json.json
+    const keyPath = require('fs').existsSync(path.join(__dirname, 'serviceAccountKey.json'))
+      ? path.join(__dirname, 'serviceAccountKey.json')
+      : path.join(__dirname, 'serviceAccountKey.json.json')
       const key     = require(keyPath)
       credential    = admin.credential.cert(key)
     }

@@ -9,8 +9,15 @@
  *   Cuotas      = estudiante_id = uid
  *
  * Campos espejados con migracion.js:
- *   nombre, rut, rut_limpio, curso, apoderado_nombre, apoderado_email,
+ *   nombre, rut, rut_limpio, curso,
+ *   apoderado_nombre, apoderado_email, apoderado_rut, apoderado_rut_limpio,
  *   monto_cuota, es_becado, requiere_cambio_clave, created_at
+ *
+ * Estructura de familias:
+ *   Familia A — Jorge García Muñoz (padre de 2 hermanos)
+ *   Familia B — Ricardo Pérez Soto (padre de 3 hermanos)
+ *   Familia C — Carmen Lagos Moreno (madre de 2 mellizos)
+ *   8 estudiantes únicos (un solo hijo por apoderado)
  *
  * Ejecutar con:
  *   npm run seed:demo
@@ -49,9 +56,44 @@ const PASSWORD_DEMO = 'Demo2026!'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** "22.333.444-5" → "223334445"  (igual que migracion.js) */
+/**
+ * Calcula el dígito verificador chileno (módulo 11) para un número de RUT.
+ * @param {number|string} num  — solo los dígitos, sin DV ni puntos
+ * @returns {string}  '0'..'9' | 'K'
+ */
+function calcularDV(num) {
+  const digits  = String(num).split('').reverse()
+  const factors = [2, 3, 4, 5, 6, 7]
+  const sum     = digits.reduce((acc, d, i) => acc + Number(d) * factors[i % 6], 0)
+  const r       = 11 - (sum % 11)
+  if (r === 11) return '0'
+  if (r === 10) return 'K'
+  return String(r)
+}
+
+/**
+ * Formatea un número de RUT como "12.345.678-5".
+ * @param {number|string} num
+ */
+function formatRut(num) {
+  const s      = String(num)
+  const dv     = calcularDV(num)
+  const parts  = []
+  let i = s.length
+  while (i > 0) {
+    parts.unshift(s.slice(Math.max(0, i - 3), i))
+    i -= 3
+  }
+  return `${parts.join('.')}-${dv}`
+}
+
+/**
+ * Quita puntos, guión y espacios; normaliza a mayúsculas.
+ * Igual que migracion.js + verificarOwnership.js.
+ * Ejemplo: "12.345.678-K" → "12345678K"
+ */
 function limpiarRut(rut) {
-  return String(rut).replace(/[.\-\s]/g, '').trim()
+  return String(rut).replace(/[.\-\s]/g, '').trim().toUpperCase()
 }
 
 function rutAEmail(rut) {
@@ -67,7 +109,7 @@ function fechaVencimiento(mes) {
 function fechaPagoAleatoria(mes) {
   const mesIndex = MESES.indexOf(mes)
   const mesReal  = mesIndex + 2
-  const dia = Math.floor(Math.random() * 7) + 1
+  const dia      = Math.floor(Math.random() * 7) + 1
   return Timestamp.fromDate(new Date(ANIO, mesReal - 1, dia))
 }
 
@@ -88,224 +130,273 @@ async function crearOActualizarUsuario(rut, password, nombre) {
   }
 }
 
+// ─── Apoderados ───────────────────────────────────────────────────────────────
+// rutNum: solo los dígitos, sin DV. El DV se calcula con calcularDV().
+// RUTs generados con módulo-11 verificado.
+//
+//  12345678 → DV 5 → 12.345.678-5  (Jorge García Muñoz)
+//  11222333 → DV 9 → 11.222.333-9  (Ricardo Pérez Soto)
+//  13456789 → DV 9 → 13.456.789-9  (Carmen Lagos Moreno)
+//  14567890 → DV 0 → 14.567.890-0  (Marco Ríos Espinoza)
+//  15678901 → DV 1 → 15.678.901-1  (Sonia Flores Medina)
+//  16789012 → DV 1 → 16.789.012-1  (Miguel Guzmán Pinto)
+//   7654321 → DV 6 →  7.654.321-6  (Luis Torres Vega)
+//   9876543 → DV 3 →  9.876.543-3  (Jorge López Díaz)
+//  11345678 → DV 7 → 11.345.678-7  (Elena Peña Salazar)
+//  10123456 → DV 8 → 10.123.456-8  (Carmen Araya Cárdenas)
+//   8765432 → DV K →  8.765.432-K  (Francisco Castro Reyes)
+
+const _APO_RAW = {
+  // ── Familias ──────────────────────────────────────────────────────────────
+  familiaA: { rutNum: 12345678, nombre: 'Jorge García Muñoz',           email: 'jorge.garcia.m@gmail.com' },
+  familiaB: { rutNum: 11222333, nombre: 'Ricardo Pérez Soto',            email: 'ricardo.perez.s@gmail.com' },
+  familiaC: { rutNum: 13456789, nombre: 'Carmen Lagos Moreno',           email: 'carmen.lagos.m@gmail.com' },
+  // ── Solos ─────────────────────────────────────────────────────────────────
+  luisTorres:      { rutNum:  7654321, nombre: 'Luis Alberto Torres Vega',     email: 'luis.torres.v@yahoo.com' },
+  jorgeLopez:      { rutNum:  9876543, nombre: 'Jorge Enrique López Díaz',     email: 'jorge.lopez.d@gmail.com' },
+  elenaPena:       { rutNum: 11345678, nombre: 'Elena Beatriz Peña Salazar',   email: 'elena.pena.s@gmail.com' },
+  marcoRios:       { rutNum: 14567890, nombre: 'Marco Antonio Ríos Espinoza',  email: 'marco.rios.e@hotmail.com' },
+  soniaFlores:     { rutNum: 15678901, nombre: 'Sonia Inés Flores Medina',     email: 'sonia.flores.m@gmail.com' },
+  miguelGuzman:    { rutNum: 16789012, nombre: 'Miguel Ángel Guzmán Pinto',    email: 'miguel.guzman.p@gmail.com' },
+  carmenAraya:     { rutNum: 10123456, nombre: 'Carmen Gloria Araya Cárdenas', email: 'carmen.araya.c@gmail.com' },
+  franciscoCastro: { rutNum:  8765432, nombre: 'Francisco Javier Castro Reyes',email: 'francisco.castro.r@gmail.com' },
+}
+
+// Pre-calcular rut y rut_limpio para cada apoderado
+const APODERADOS = Object.fromEntries(
+  Object.entries(_APO_RAW).map(([k, a]) => {
+    const rut     = formatRut(a.rutNum)
+    return [k, { ...a, rut, rut_limpio: limpiarRut(rut) }]
+  })
+)
+
 // ─── 15 Estudiantes ficticios ─────────────────────────────────────────────────
 //
-// RUTs verificados con el algoritmo módulo-11 estándar chileno:
-//   15.123.456-9 ✓   16.234.567-2 ✓   17.345.678-6 ✓   18.456.789-K ✓
-//   19.567.890-1 ✓   20.678.901-8 ✓   21.789.012-8 ✓   22.890.123-7 ✓
-//   14.901.234-6 ✓   15.012.345-3 ✓   16.123.456-7 ✓   17.234.567-0 ✓
-//   18.345.678-4 ✓   19.456.789-8 ✓   20.567.890-5 ✓
+// Estructura:
+//   Familia A  → 2 hermanos  (García Soto)
+//   Familia B  → 3 hermanos  (Pérez Muñoz)
+//   Familia C  → 2 mellizos  (Rojas Lagos)
+//   8 solos    → un hijo por apoderado
+//
+// RUTs de estudiantes verificados con módulo-11:
+//   15.123.456-9   16.234.567-2   17.345.678-6   18.456.789-K   19.567.890-1
+//   20.678.901-8   21.789.012-8   22.890.123-7   14.901.234-6   15.012.345-3
+//   16.123.456-7   17.234.567-0   18.345.678-4   19.456.789-8   20.567.890-5
 //
 const DEMO_ESTUDIANTES = [
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // FAMILIA A — apoderado: Jorge García Muñoz (12.345.678-5)
+  // 2 hermanos: María José y Tomás García Soto
+  // ══════════════════════════════════════════════════════════════════════════
   {
-    // 1 — Buen pagador: ambas cuotas vencidas pagadas
-    rut:              '15.123.456-9',
-    nombre:           'Sofía González Pérez',
-    curso:            '3° Básico A',
-    apoderado_nombre: 'María Fernanda González Rojas',
-    apoderado_email:  'maria.gonzalez.r@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo','Abril'],
-    enRevision:       [],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // A1 — Buen pagador
+    rut:       '15.123.456-9',
+    nombre:    'María José García Soto',
+    curso:     '3° Básico A',
+    apoderado: APODERADOS.familiaA,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo', 'Abril'],
+    enRevision:  [],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 2 — Un mes atrasado
-    rut:              '16.234.567-2',
-    nombre:           'Diego Muñoz Torres',
-    curso:            '6° Básico B',
-    apoderado_nombre: 'Carlos Andrés Muñoz Soto',
-    apoderado_email:  'carlos.munoz.s@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo'],
-    enRevision:       [],
-    atrasados:        ['Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // A2 — Un mes atrasado
+    rut:       '16.234.567-2',
+    nombre:    'Tomás García Soto',
+    curso:     '6° Básico B',
+    apoderado: APODERADOS.familiaA,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo'],
+    enRevision:  [],
+    atrasados:   ['Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // FAMILIA B — apoderado: Ricardo Pérez Soto (11.222.333-9)
+  // 3 hermanos: Sofía, Matías y Elena Pérez Muñoz
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    // B1 — Morosa grave: nada pagado
+    rut:       '17.345.678-6',
+    nombre:    'Sofía Pérez Muñoz',
+    curso:     '8° Básico A',
+    apoderado: APODERADOS.familiaB,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     [],
+    enRevision:  [],
+    atrasados:   ['Marzo', 'Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 3 — Morosa grave: nada pagado
-    rut:              '17.345.678-6',
-    nombre:           'Valentina Herrera Soto',
-    curso:            '8° Básico A',
-    apoderado_nombre: 'Ana Patricia Herrera Valdés',
-    apoderado_email:  'ana.herrera.v@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          [],
-    enRevision:       [],
-    atrasados:        ['Marzo','Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // B2 — Comprobante en revisión
+    rut:       '18.456.789-K',
+    nombre:    'Matías Pérez Muñoz',
+    curso:     '4° Básico B',
+    apoderado: APODERADOS.familiaB,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo'],
+    enRevision:  ['Abril'],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 4 — Comprobante en revisión
-    rut:              '18.456.789-K',
-    nombre:           'Matías Vargas Quiroz',
-    curso:            '4° Básico B',
-    apoderado_nombre: 'Roberto Ignacio Vargas Fuentes',
-    apoderado_email:  'roberto.vargas.f@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo'],
-    enRevision:       ['Abril'],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // B3 — Becado, al día
+    rut:       '19.567.890-1',
+    nombre:    'Elena Pérez Muñoz',
+    curso:     '7° Básico A',
+    apoderado: APODERADOS.familiaB,
+    monto_cuota: 60000,
+    es_becado:   true,
+    pagados:     ['Marzo', 'Abril'],
+    enRevision:  [],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // FAMILIA C — apoderado: Carmen Lagos Moreno (13.456.789-9)
+  // 2 mellizos: Benjamín y Isidora Rojas Lagos
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    // C1 — Sin pagos aún
+    rut:       '20.678.901-8',
+    nombre:    'Benjamín Rojas Lagos',
+    curso:     'Kinder A',
+    apoderado: APODERADOS.familiaC,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     [],
+    enRevision:  [],
+    atrasados:   ['Marzo', 'Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 5 — Becada, al día
-    rut:              '19.567.890-1',
-    nombre:           'Isabella Sánchez Leal',
-    curso:            '7° Básico A',
-    apoderado_nombre: 'Patricia Loreto Sánchez Mora',
-    apoderado_email:  'patricia.sanchez.m@outlook.com',
-    monto_cuota:      60000,
-    es_becado:        true,
-    pagados:          ['Marzo','Abril'],
-    enRevision:       [],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // C2 — Un mes pagado, un mes atrasado
+    rut:       '21.789.012-8',
+    nombre:    'Isidora Rojas Lagos',
+    curso:     'Kinder B',
+    apoderado: APODERADOS.familiaC,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo'],
+    enRevision:  [],
+    atrasados:   ['Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SOLOS — un hijo por apoderado (8 estudiantes)
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    // S1 — Comprobante en revisión
+    rut:       '22.890.123-7',
+    nombre:    'Camila Torres Vega',
+    curso:     '7° Básico A',
+    apoderado: APODERADOS.luisTorres,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo'],
+    enRevision:  ['Abril'],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 6 — Kinder, sin pagos aún (recién matriculado)
-    rut:              '20.678.901-8',
-    nombre:           'Nicolás Rojas Fuentes',
-    curso:            'Kinder A',
-    apoderado_nombre: 'Andrea Carolina Rojas Castro',
-    apoderado_email:  'andrea.rojas.c@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          [],
-    enRevision:       [],
-    atrasados:        ['Marzo','Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S2 — Todo atrasado
+    rut:       '14.901.234-6',
+    nombre:    'Fernanda López Díaz',
+    curso:     '8° Básico B',
+    apoderado: APODERADOS.jorgeLopez,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     [],
+    enRevision:  [],
+    atrasados:   ['Marzo', 'Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 7 — 1° Básico, un mes pagado un mes atrasado
-    rut:              '21.789.012-8',
-    nombre:           'Camila Torres Vega',
-    curso:            '1° Básico A',
-    apoderado_nombre: 'Luis Alberto Torres Vega',
-    apoderado_email:  'luis.torres.v@yahoo.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo'],
-    enRevision:       [],
-    atrasados:        ['Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S3 — Becado parcial, excelente pagador
+    rut:       '15.012.345-3',
+    nombre:    'Andrés Peña Salazar',
+    curso:     '2° Básico A',
+    apoderado: APODERADOS.elenaPena,
+    monto_cuota: 45000,
+    es_becado:   true,
+    pagados:     ['Marzo', 'Abril'],
+    enRevision:  [],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 8 — Comprobante abril en revisión
-    rut:              '22.890.123-7',
-    nombre:           'Sebastián Morales Castro',
-    curso:            '7° Básico A',
-    apoderado_nombre: 'Claudia Andrea Morales Castro',
-    apoderado_email:  'claudia.morales.c@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo'],
-    enRevision:       ['Abril'],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S4 — Solo marzo pagado
+    rut:       '16.123.456-7',
+    nombre:    'Catalina Ríos Espinoza',
+    curso:     '5° Básico A',
+    apoderado: APODERADOS.marcoRios,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo'],
+    enRevision:  [],
+    atrasados:   ['Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 9 — 8° Básico, critico: todo atrasado
-    rut:              '14.901.234-6',
-    nombre:           'Fernanda López Díaz',
-    curso:            '8° Básico B',
-    apoderado_nombre: 'Jorge Enrique López Díaz',
-    apoderado_email:  'jorge.lopez.d@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          [],
-    enRevision:       [],
-    atrasados:        ['Marzo','Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S5 — Muy atrasado
+    rut:       '17.234.567-0',
+    nombre:    'Joaquín Flores Medina',
+    curso:     '8° Básico B',
+    apoderado: APODERADOS.soniaFlores,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     [],
+    enRevision:  [],
+    atrasados:   ['Marzo', 'Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 10 — Becado parcial, excelente pagador
-    rut:              '15.012.345-3',
-    nombre:           'Andrés Peña Salazar',
-    curso:            '2° Básico A',
-    apoderado_nombre: 'Elena Beatriz Peña Salazar',
-    apoderado_email:  'elena.pena.s@gmail.com',
-    monto_cuota:      45000,
-    es_becado:        true,
-    pagados:          ['Marzo','Abril'],
-    enRevision:       [],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S6 — Kinder, al día
+    rut:       '18.345.678-4',
+    nombre:    'Renata Guzmán Pinto',
+    curso:     'Kinder A',
+    apoderado: APODERADOS.miguelGuzman,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo', 'Abril'],
+    enRevision:  [],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 11 — 5° Básico, solo marzo pagado
-    rut:              '16.123.456-7',
-    nombre:           'Catalina Ríos Espinoza',
-    curso:            '5° Básico A',
-    apoderado_nombre: 'Marco Antonio Ríos Espinoza',
-    apoderado_email:  'marco.rios.e@hotmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo'],
-    enRevision:       [],
-    atrasados:        ['Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S7 — Becado parcial, un mes atrasado
+    rut:       '19.456.789-8',
+    nombre:    'Felipe Araya Cárdenas',
+    curso:     '6° Básico A',
+    apoderado: APODERADOS.carmenAraya,
+    monto_cuota: 65000,
+    es_becado:   true,
+    pagados:     ['Marzo'],
+    enRevision:  [],
+    atrasados:   ['Abril'],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
   {
-    // 12 — 8° Básico, muy atrasado
-    rut:              '17.234.567-0',
-    nombre:           'Joaquín Flores Medina',
-    curso:            '8° Básico B',
-    apoderado_nombre: 'Sonia Inés Flores Medina',
-    apoderado_email:  'sonia.flores.m@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          [],
-    enRevision:       [],
-    atrasados:        ['Marzo','Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
-  },
-  {
-    // 13 — Kinder, al día
-    rut:              '18.345.678-4',
-    nombre:           'Renata Guzmán Pinto',
-    curso:            'Kinder A',
-    apoderado_nombre: 'Miguel Ángel Guzmán Pinto',
-    apoderado_email:  'miguel.guzman.p@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo','Abril'],
-    enRevision:       [],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
-  },
-  {
-    // 14 — 6° Básico, becado parcial, un mes atrasado
-    rut:              '19.456.789-8',
-    nombre:           'Felipe Araya Cárdenas',
-    curso:            '6° Básico A',
-    apoderado_nombre: 'Carmen Gloria Araya Cárdenas',
-    apoderado_email:  'carmen.araya.c@gmail.com',
-    monto_cuota:      65000,
-    es_becado:        true,
-    pagados:          ['Marzo'],
-    enRevision:       [],
-    atrasados:        ['Abril'],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
-  },
-  {
-    // 15 — 6° Básico A, comprobante en revisión
-    rut:              '20.567.890-5',
-    nombre:           'Antonia Castro Reyes',
-    curso:            '6° Básico A',
-    apoderado_nombre: 'Francisco Javier Castro Reyes',
-    apoderado_email:  'francisco.castro.r@gmail.com',
-    monto_cuota:      MONTO_NORMAL,
-    es_becado:        false,
-    pagados:          ['Marzo'],
-    enRevision:       ['Abril'],
-    atrasados:        [],
-    pendientes:       ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+    // S8 — Comprobante en revisión
+    rut:       '20.567.890-5',
+    nombre:    'Antonia Castro Reyes',
+    curso:     '6° Básico A',
+    apoderado: APODERADOS.franciscoCastro,
+    monto_cuota: MONTO_NORMAL,
+    es_becado:   false,
+    pagados:     ['Marzo'],
+    enRevision:  ['Abril'],
+    atrasados:   [],
+    pendientes:  ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
   },
 ]
 
@@ -318,7 +409,6 @@ const ADMIN_NOMBRE   = 'Secretaría - Finanzas'
 async function limpiarColeccion(nombre) {
   const snap = await db.collection(nombre).get()
   if (snap.empty) return
-  // Firestore limita a 500 ops por batch; dividimos si es necesario
   const chunks = []
   for (let i = 0; i < snap.docs.length; i += 490) chunks.push(snap.docs.slice(i, i + 490))
   for (const chunk of chunks) {
@@ -330,7 +420,6 @@ async function limpiarColeccion(nombre) {
 }
 
 async function limpiarCuentasAuth() {
-  // Eliminar todos los usuarios del dominio interno para evitar UIDs huérfanos
   const emailsAEliminar = DEMO_ESTUDIANTES.map(e => rutAEmail(e.rut))
   emailsAEliminar.push(rutAEmail(ADMIN_RUT))
 
@@ -348,6 +437,7 @@ async function limpiarCuentasAuth() {
 // ─── Seed principal ───────────────────────────────────────────────────────────
 async function seed() {
   console.log('\n🌱 Iniciando seed — 15 estudiantes ficticios (Colegio Diego Thomson)\n')
+  console.log('   Familias: A (2 hermanos) · B (3 hermanos) · C (2 mellizos) · 8 solos\n')
 
   // 1. Limpiar todo
   console.log('🧹 Limpiando datos anteriores...')
@@ -357,32 +447,36 @@ async function seed() {
   console.log('')
 
   // 2. Crear estudiantes y cuotas
-  const batch      = db.batch()
-  let docsCreados  = 0
+  const batch     = db.batch()
+  let docsCreados = 0
 
   for (const est of DEMO_ESTUDIANTES) {
+    const apo = est.apoderado
     console.log(`👤 ${est.nombre}  (${est.rut})  →  ${est.curso}`)
+    console.log(`   apoderado: ${apo.nombre}  RUT: ${apo.rut}`)
 
     const uid      = await crearOActualizarUsuario(est.rut, PASSWORD_DEMO, est.nombre)
     const rutLimpio = limpiarRut(est.rut)
 
-    // ── Estudiantes/{uid} ──────────────────────────────────────────────────────
+    // ── Estudiantes/{uid} ──────────────────────────────────────────────────
     const estRef = db.collection('Estudiantes').doc(uid)
     batch.set(estRef, {
       nombre:                est.nombre,
       rut:                   est.rut,
       rut_limpio:            rutLimpio,
       curso:                 est.curso,
-      apoderado_nombre:      est.apoderado_nombre,
-      apoderado_email:       est.apoderado_email,
+      apoderado_nombre:      apo.nombre,
+      apoderado_email:       apo.email,
+      apoderado_rut:         apo.rut,
+      apoderado_rut_limpio:  apo.rut_limpio,
       monto_cuota:           est.monto_cuota,
       es_becado:             est.es_becado,
-      requiere_cambio_clave: false,        // demo: sin forzar cambio de clave
+      requiere_cambio_clave: false,
       created_at:            FieldValue.serverTimestamp(),
     })
     docsCreados++
 
-    // ── Cuotas ─────────────────────────────────────────────────────────────────
+    // ── Cuotas ─────────────────────────────────────────────────────────────
     for (const mes of MESES) {
       const cuotaRef = db.collection('Cuotas').doc()
       let estado = 'pendiente'
@@ -432,22 +526,42 @@ async function seed() {
   })
   console.log(`  [admin doc] Admins/${adminUid}`)
 
-  // ─── Resumen ──────────────────────────────────────────────────────────────────
+  // ─── Resumen ──────────────────────────────────────────────────────────────
   console.log(`\n✅ Seed completado: ${DEMO_ESTUDIANTES.length} estudiantes, ${docsCreados} documentos Firestore.\n`)
   console.log('══════════════════════════════════════════════════════════════════════')
   console.log(`🔑 ADMIN     RUT: ${ADMIN_RUT}  |  Clave: ${ADMIN_PASSWORD}`)
   console.log('══════════════════════════════════════════════════════════════════════')
   console.log(`📋 ESTUDIANTES — clave única para todos: ${PASSWORD_DEMO}\n`)
 
-  DEMO_ESTUDIANTES.forEach((e, i) => {
-    const pag  = e.pagados.length
-    const atr  = e.atrasados.length
-    const rev  = e.enRevision.length
+  // Familias
+  const groups = [
+    { label: 'FAMILIA A', key: 'familiaA' },
+    { label: 'FAMILIA B', key: 'familiaB' },
+    { label: 'FAMILIA C', key: 'familiaC' },
+  ]
+  for (const g of groups) {
+    const apo  = APODERADOS[g.key]
+    const hijos = DEMO_ESTUDIANTES.filter(e => e.apoderado === apo)
+    console.log(`  ── ${g.label} — ${apo.nombre} (${apo.rut})  ✉ ${apo.email}`)
+    hijos.forEach(e => {
+      const beca = e.es_becado ? ` 🎓 BECADO ($${e.monto_cuota.toLocaleString('es-CL')})` : ''
+      console.log(`     • ${e.rut.padEnd(15)}  ${e.nombre}  (${e.curso})${beca}`)
+      console.log(`       💚 ${e.pagados.length} pag  🔴 ${e.atrasados.length} atr  🟡 ${e.enRevision.length} rev`)
+    })
+    console.log('')
+  }
+
+  console.log('  ── SOLOS')
+  const solos = DEMO_ESTUDIANTES.filter(e =>
+    !['familiaA','familiaB','familiaC'].map(k => APODERADOS[k]).includes(e.apoderado)
+  )
+  solos.forEach((e, i) => {
     const beca = e.es_becado ? ` 🎓 BECADO ($${e.monto_cuota.toLocaleString('es-CL')})` : ''
     console.log(`  ${String(i+1).padStart(2)}. ${e.rut.padEnd(15)}  ${e.nombre}  (${e.curso})${beca}`)
-    console.log(`      ✉  ${e.apoderado_email}`)
-    console.log(`      💚 ${pag} pagada(s)   🔴 ${atr} atrasada(s)   🟡 ${rev} en revisión\n`)
+    console.log(`      ✉  ${e.apoderado.email}  (apoderado: ${e.apoderado.nombre})`)
+    console.log(`      💚 ${e.pagados.length} pagada(s)   🔴 ${e.atrasados.length} atrasada(s)   🟡 ${e.enRevision.length} en revisión\n`)
   })
+
   console.log('══════════════════════════════════════════════════════════════════════\n')
 }
 
