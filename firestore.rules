@@ -190,5 +190,18 @@ service cloud.firestore {
       allow update,
             delete: if false;
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // AUDITORÍA DE PAGOS
+    // Escrita exclusivamente desde el servidor (Admin SDK) — no desde clientes.
+    // Los API routes confirmar-pago-manual y procesar-revision escriben aquí.
+    // Lectura: solo admin (secretaría no necesita consultar auditoría).
+    // Inmutable una vez creado (update y delete bloqueados).
+    // ════════════════════════════════════════════════════════════════════════
+    match /AuditoriaPagos/{docId} {
+      allow read:             if esAdmin();
+      allow create, update,
+            delete:           if false;
+    }
   }
 }
