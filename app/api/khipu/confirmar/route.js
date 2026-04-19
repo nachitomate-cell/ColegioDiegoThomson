@@ -11,20 +11,43 @@ const KHIPU_V3_URL = 'https://payment-api.khipu.com/v3/payments'
 
 export async function POST(request) {
   try {
-    // Khipu v3 puede enviar el token como form-urlencoded o como JSON.
+    // TODO: remover tras diagnóstico
+    // Leer el body UNA SOLA VEZ como texto crudo (el stream no se puede releer).
+    const rawBody = await request.text()
+    let parsedBody = null
+    try { parsedBody = JSON.parse(rawBody) } catch { parsedBody = null }
+
+    console.log('[DEBUG_KHIPU_WEBHOOK] Recibido', {
+      method:      request.method,
+      contentType: request.headers.get('content-type'),
+      khipuHeaders: {
+        hasSignature:     !!request.headers.get('x-khipu-signature'),
+        notificationId:   request.headers.get('x-khipu-notification-id') || null,
+        khipuVersion:     request.headers.get('x-khipu-api-version') || null,
+      },
+      bodyKeys:       parsedBody ? Object.keys(parsedBody) : 'no-json',
+      bodyPreview:    rawBody.substring(0, 300),
+      rawBodyLength:  rawBody.length,
+    })
+
+    // Determinar notification_token desde el body ya leído
     const contentType = request.headers.get('content-type') ?? ''
     let notification_token = null
 
     if (contentType.includes('application/json')) {
-      const json = await request.json()
-      notification_token = json.notification_token ?? null
+      notification_token = parsedBody?.notification_token ?? null
     } else {
       // form-urlencoded (comportamiento legacy / fallback)
-      const text = await request.text()
-      notification_token = new URLSearchParams(text).get('notification_token')
+      notification_token = new URLSearchParams(rawBody).get('notification_token')
     }
 
     if (!notification_token) {
+      console.error('[DEBUG_KHIPU_WEBHOOK] Rechazado 400', {
+        razon:           'notification_token ausente',
+        contentType,
+        parsedBodyKeys:  parsedBody ? Object.keys(parsedBody) : 'no-json',
+        rawBodyPreview:  rawBody.substring(0, 200),
+      })
       return NextResponse.json({ error: 'notification_token ausente' }, { status: 400 })
     }
 
@@ -35,9 +58,6 @@ export async function POST(request) {
     }
 
     // ── Verificar pago con Khipu v3 ───────────────────────────────────────────
-    // Khipu v3 permite verificar por notification_token (query param) o por
-    // payment_id (path param: GET /v3/payments/{id}).
-    // Intentamos primero con notification_token; si falla usamos payment_id.
     const verifyRes = await fetch(
       `${KHIPU_V3_URL}?notification_token=${encodeURIComponent(notification_token)}`,
       {
@@ -57,7 +77,11 @@ export async function POST(request) {
     }
 
     if (!verifyRes.ok) {
-      console.error('[Khipu Webhook] Error verificando token:', data)
+      console.error('[DEBUG_KHIPU_WEBHOOK] Rechazado 400', {
+        razon:        'token inválido según Khipu',
+        khipuStatus:  verifyRes.status,
+        khipuData:    JSON.stringify(data).substring(0, 300),
+      })
       return NextResponse.json({ error: 'Token inválido' }, { status: 400 })
     }
 
@@ -80,9 +104,9 @@ export async function POST(request) {
           return
         }
         t.update(cuotaRef, {
-          estado:          'pagado',
-          fecha_pago:      admin.firestore.FieldValue.serverTimestamp(),
-          comprobante_url: null,
+          estado:           'pagado',
+          fecha_pago:       admin.firestore.FieldValue.serverTimestamp(),
+          comprobante_url:  null,
           khipu_payment_id: data.payment_id,
           khipu_amount:     data.amount,
           aprobado_por:     'online',
