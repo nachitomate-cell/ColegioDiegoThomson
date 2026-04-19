@@ -38,8 +38,6 @@ async function getTx() {
   const { commerceCode, apiKey, isProduction } = getTbkCredentials()
   const env         = isProduction ? mod.Environment.Production : mod.Environment.Integration
 
-  console.log('[Transbank] init | code:', commerceCode, '| env:', isProduction ? 'PROD' : 'INT')
-
   _tx = new mod.WebpayPlus.Transaction(new mod.Options(commerceCode, apiKey, env))
   return _tx
 }
@@ -68,25 +66,7 @@ export async function POST(request) {
     }
 
     // ── 2. Verificar que el usuario autenticado es dueño de la cuota ──────────
-    // [DEBUG_PAGO] Log antes de verificar ownership
-    console.log('[DEBUG_PAGO] Iniciando pago', {
-      pasarela:                 'Transbank WebPay Plus',
-      monto:                    cuota.monto,
-      cuotaId,
-      cuotaEstado:              cuota.estado,
-      cuotaEstudianteId:        cuota.estudiante_id ?? 'N/A',
-      hasCommerceCode:          !!process.env.TRANSBANK_COMMERCE_CODE,
-      hasApiKey:                !!process.env.TRANSBANK_API_KEY,
-      tbkEnvironment:           process.env.TRANSBANK_ENVIRONMENT || 'no definido (fallback a integración)',
-      usingFallbackCredentials: !process.env.TRANSBANK_COMMERCE_CODE || !process.env.TRANSBANK_API_KEY,
-      hasAuthHeader:            request.headers.has('authorization'),
-    })
-
     const esOwner = await verificarOwnership(request, cuota)
-
-    // [DEBUG_PAGO] Log resultado de ownership
-    console.log('[DEBUG_PAGO] Resultado verificarOwnership:', esOwner)
-
     if (!esOwner) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
     }
@@ -100,38 +80,15 @@ export async function POST(request) {
     const amount    = cuota.monto
     const returnUrl = `${getBaseUrl()}/api/pago/confirmar`
 
-    console.log('[Transbank] create →', { buyOrder, sessionId, amount, returnUrl })
-
-    // [DEBUG_PAGO] Wrap de la llamada a la pasarela con logging detallado
-    let response
-    try {
-      const tx = await getTx()
-      console.log('[DEBUG_PAGO] Llamando tx.create a Transbank', { buyOrder, amount, returnUrl })
-      response = await tx.create(buyOrder, sessionId, amount, returnUrl)
-      console.log('[DEBUG_PAGO] Respuesta OK de Transbank', {
-        status: response.status ?? 'N/A',
-        tokenPrefix: response.token?.slice(0, 20),
-        url: response.url,
-      })
-    } catch (error) {
-      console.error('[DEBUG_PAGO] Error pasarela Transbank', {
-        message:     error.message,
-        httpStatus:  error.response?.status ?? error.httpCode ?? error.status ?? 'N/A',
-        httpBody:    error.response?.data   ?? error.responseText ?? 'N/A',
-        httpHeaders: error.response?.headers ?? 'N/A',
-        stack:       error.stack,
-      })
-      throw error
-    }
-
-    console.log('[Transbank] create OK → token:', response.token?.slice(0, 20), '...')
+    const tx       = await getTx()
+    const response = await tx.create(buyOrder, sessionId, amount, returnUrl)
 
     return NextResponse.json({ url: response.url, token: response.token, cuotaId })
 
   } catch (error) {
-    console.error('[API /pago/iniciar] Error:', error?.message ?? error)
+    console.error('[/api/pago/iniciar]', error?.message ?? error)
     return NextResponse.json(
-      { error: error?.message ?? 'Error al iniciar el pago. Intenta nuevamente.' },
+      { error: 'Error al iniciar el pago. Intenta nuevamente.' },
       { status: 500 }
     )
   }
