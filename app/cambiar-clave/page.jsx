@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { updatePassword, onAuthStateChanged, signOut } from 'firebase/auth'
+import { updatePassword, onAuthStateChanged, signOut, getIdToken } from 'firebase/auth'
 import { doc, updateDoc } from 'firebase/firestore'
 import { auth, db } from '../../firebase/firebaseConfig'
+import ConsentimientoModal from '../../components/ConsentimientoModal'
 
 // ─── Requisitos mínimos de contraseña ────────────────────────────────────────
 const MIN_LENGTH = 8
@@ -40,6 +41,8 @@ export default function CambiarClavePage() {
   const [success, setSuccess]       = useState(false)
   const [loading, setLoading]       = useState(false)
   const [necesitaRelogin, setNecesitaRelogin] = useState(false)
+  const [mostrarConsentimiento, setMostrarConsentimiento] = useState(false)
+  const [consentimientoLoading, setConsentimientoLoading] = useState(false)
 
   // ── Protección de ruta: si no hay sesión activa, volver al login ──────────
   useEffect(() => {
@@ -78,9 +81,9 @@ export default function CambiarClavePage() {
         apoderado_email: email.trim().toLowerCase(),
       })
 
-      // ── 3. Mostrar confirmación y redirigir ───────────────────────────────
+      // ── 3. Mostrar confirmación y luego modal de consentimiento ─────────
       setSuccess(true)
-      setTimeout(() => router.push('/dashboard'), 1500)
+      setTimeout(() => setMostrarConsentimiento(true), 800)
 
     } catch (err) {
       switch (err.code) {
@@ -102,6 +105,25 @@ export default function CambiarClavePage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ── Registro de consentimiento y redirección al dashboard ────────────────
+  const handleAceptarConsentimiento = async () => {
+    if (!user) return
+    setConsentimientoLoading(true)
+    try {
+      const token = await getIdToken(user)
+      await fetch('/api/consentimiento/registrar', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+    } catch (err) {
+      console.error('[cambiar-clave] Error al registrar consentimiento:', err)
+      // Continuamos igual — no bloqueamos el acceso por un fallo de auditoría
+    } finally {
+      setConsentimientoLoading(false)
+    }
+    router.push('/dashboard')
   }
 
   // ── Re-login requerido por Firebase ──────────────────────────────────────
@@ -146,6 +168,11 @@ export default function CambiarClavePage() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-surface-900 flex items-center justify-center p-4">
+      <ConsentimientoModal
+        visible={mostrarConsentimiento}
+        onAceptar={handleAceptarConsentimiento}
+        loading={consentimientoLoading}
+      />
       <div className="bg-surface-700 border border-surface-500 rounded-2xl shadow-card-lg w-full max-w-sm p-8 ring-1 ring-black/5 animate-fade-in">
 
         {/* Logo + título */}
