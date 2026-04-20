@@ -7,9 +7,10 @@
 // Respuesta:     { url: string, token: string }
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NextResponse }         from 'next/server'
+import { NextResponse }        from 'next/server'
 import { adminDb }             from '../../../../firebase/adminConfig'
 import { verificarOwnership }  from '../../../../lib/verificarOwnership'
+import { getTransbankConfig }  from '../../../../lib/transbankConfig'
 
 // ── URL base de la app ────────────────────────────────────────────────────────
 // NEXT_PUBLIC_BASE_URL tiene prioridad; si no está, Vercel provee VERCEL_URL
@@ -20,30 +21,26 @@ function getBaseUrl() {
   return 'http://localhost:3000'
 }
 
-// ── Credenciales Transbank con fallback a integración ────────────────────────
-function getTbkCredentials() {
-  return {
-    commerceCode: process.env.TRANSBANK_COMMERCE_CODE ?? '597055555532',
-    apiKey:       process.env.TRANSBANK_API_KEY       ?? '579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C',
-    isProduction: process.env.TRANSBANK_ENVIRONMENT   === 'PRODUCTION',
-  }
-}
-
 // ── Lazy-init del SDK (CJS via dynamic import) ────────────────────────────────
 let _tx = null
-async function getTx() {
+async function getTx(config) {
   if (_tx) return _tx
-  const tbk         = await import('transbank-sdk')
-  const mod         = tbk.default ?? tbk
-  const { commerceCode, apiKey, isProduction } = getTbkCredentials()
-  const env         = isProduction ? mod.Environment.Production : mod.Environment.Integration
-
-  _tx = new mod.WebpayPlus.Transaction(new mod.Options(commerceCode, apiKey, env))
+  const tbk = await import('transbank-sdk')
+  const mod  = tbk.default ?? tbk
+  const env  = config.isProduction ? mod.Environment.Production : mod.Environment.Integration
+  console.log('[Transbank] SDK inicializado en modo:', config.isProduction ? 'PROD' : 'INT')
+  _tx = new mod.WebpayPlus.Transaction(new mod.Options(config.commerceCode, config.apiKey, env))
   return _tx
 }
 
 export async function POST(request) {
   try {
+    // ── 0. Validar configuración Transbank ─────────────────────────────────────
+    const config = getTransbankConfig()
+    if (!config.ok) {
+      return NextResponse.json({ error: config.error }, { status: 503 })
+    }
+
     const { cuotaId } = await request.json()
 
     if (!cuotaId || typeof cuotaId !== 'string') {
@@ -80,7 +77,7 @@ export async function POST(request) {
     const amount    = cuota.monto
     const returnUrl = `${getBaseUrl()}/api/pago/confirmar`
 
-    const tx       = await getTx()
+    const tx       = await getTx(config)
     const response = await tx.create(buyOrder, sessionId, amount, returnUrl)
 
     return NextResponse.json({ url: response.url, token: response.token, cuotaId })

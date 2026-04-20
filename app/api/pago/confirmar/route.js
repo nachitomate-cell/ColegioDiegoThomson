@@ -4,9 +4,10 @@
 // Puede venir como POST (form-urlencoded) o GET (query param).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NextResponse } from 'next/server'
-import { adminDb }      from '../../../../firebase/adminConfig'
-import admin            from '../../../../firebase/adminConfig'
+import { NextResponse }       from 'next/server'
+import { adminDb }            from '../../../../firebase/adminConfig'
+import admin                  from '../../../../firebase/adminConfig'
+import { getTransbankConfig } from '../../../../lib/transbankConfig'
 
 // ── URL base ──────────────────────────────────────────────────────────────────
 function getBaseUrl() {
@@ -15,27 +16,15 @@ function getBaseUrl() {
   return 'http://localhost:3000'
 }
 
-// ── Credenciales Transbank con fallback a integración ────────────────────────
-function getTbkCredentials() {
-  return {
-    commerceCode: process.env.TRANSBANK_COMMERCE_CODE ?? '597055555532',
-    apiKey:       process.env.TRANSBANK_API_KEY       ?? '579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C',
-    isProduction: process.env.TRANSBANK_ENVIRONMENT   === 'PRODUCTION',
-  }
-}
-
 // ── Lazy-init del SDK ─────────────────────────────────────────────────────────
 let _tx = null
-async function getTx() {
+async function getTx(config) {
   if (_tx) return _tx
-  const tbk         = await import('transbank-sdk')
-  const mod         = tbk.default ?? tbk
-  const { commerceCode, apiKey, isProduction } = getTbkCredentials()
-  const env         = isProduction ? mod.Environment.Production : mod.Environment.Integration
-
-  console.log('[Transbank/confirmar] init | code:', commerceCode, '| env:', isProduction ? 'PROD' : 'INT')
-
-  _tx = new mod.WebpayPlus.Transaction(new mod.Options(commerceCode, apiKey, env))
+  const tbk = await import('transbank-sdk')
+  const mod  = tbk.default ?? tbk
+  const env  = config.isProduction ? mod.Environment.Production : mod.Environment.Integration
+  console.log('[Transbank] SDK inicializado en modo:', config.isProduction ? 'PROD' : 'INT')
+  _tx = new mod.WebpayPlus.Transaction(new mod.Options(config.commerceCode, config.apiKey, env))
   return _tx
 }
 
@@ -61,14 +50,14 @@ async function commitConReintentos(tx, tokenWs, maxIntentos = 4) {
 }
 
 // ── Lógica compartida de commit ───────────────────────────────────────────────
-async function commitToken(tokenWs) {
+async function commitToken(tokenWs, config) {
   const base = getBaseUrl()
 
   let response
   try {
-    const tx = await getTx()
+    const tx = await getTx(config)
     response = await commitConReintentos(tx, tokenWs)
-    console.log('[Transbank] commit final response:', JSON.stringify(response))
+    console.log('[Transbank] commit final | status:', response.status, '| amount:', response.amount)
   } catch (err) {
     console.error('[Transbank] commit falló todos los reintentos | msg:', err?.message)
     return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
@@ -77,7 +66,7 @@ async function commitToken(tokenWs) {
   const aprobado = response.response_code === 0 && response.status === 'AUTHORIZED'
 
   if (aprobado) {
-    const cuotaId = response.buy_order
+    const cuotaId  = response.buy_order
     const cuotaRef = adminDb.collection('Cuotas').doc(cuotaId)
 
     // Transacción atómica: evita marcar como pagada dos veces si Transbank
@@ -120,6 +109,14 @@ async function commitToken(tokenWs) {
 // ── POST: Transbank envía token_ws en body form-urlencoded ────────────────────
 export async function POST(request) {
   const base = getBaseUrl()
+
+  // ── 0. Validar configuración Transbank ───────────────────────────────────────
+  const config = getTransbankConfig()
+  if (!config.ok) {
+    console.error('[/pago/confirmar POST] Config inválida, redirigiendo a error')
+    return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
+  }
+
   try {
     const contentType = request.headers.get('content-type') ?? ''
     const url         = new URL(request.url)
@@ -151,7 +148,7 @@ export async function POST(request) {
       return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=cancelado`)
     }
 
-    return await commitToken(tokenWs)
+    return await commitToken(tokenWs, config)
   } catch (error) {
     console.error('[/pago/confirmar POST] Error inesperado:', error?.message ?? error)
     return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
@@ -161,6 +158,14 @@ export async function POST(request) {
 // ── GET: Transbank redirige con token_ws o TBK_TOKEN en query params ──────────
 export async function GET(request) {
   const base = getBaseUrl()
+
+  // ── 0. Validar configuración Transbank ───────────────────────────────────────
+  const config = getTransbankConfig()
+  if (!config.ok) {
+    console.error('[/pago/confirmar GET] Config inválida, redirigiendo a error')
+    return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
+  }
+
   const { searchParams } = new URL(request.url)
   const tbkToken = searchParams.get('TBK_TOKEN')
   const tokenWs  = searchParams.get('token_ws')
@@ -173,7 +178,7 @@ export async function GET(request) {
   if (tokenWs) {
     console.log('[/pago/confirmar GET] token_ws recibido:', tokenWs?.slice(0, 20), '...')
     try {
-      return await commitToken(tokenWs)
+      return await commitToken(tokenWs, config)
     } catch (error) {
       console.error('[/pago/confirmar GET] Error inesperado:', error?.message ?? error)
       return NextResponse.redirect(`${base}/pago/resultado?success=false&motivo=error`)
