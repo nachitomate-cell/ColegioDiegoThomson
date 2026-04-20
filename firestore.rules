@@ -203,5 +203,19 @@ service cloud.firestore {
       allow create, update,
             delete:           if false;
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CONSENTIMIENTOS
+    // Registro de aceptación de política de privacidad por apoderado.
+    // Escrito exclusivamente desde el servidor (Admin SDK) vía
+    // /api/consentimiento/registrar — no directamente desde el cliente.
+    // Lectura: el propio usuario puede verificar si ya consintió.
+    // Inmutable desde el cliente (create/update/delete bloqueados).
+    // ════════════════════════════════════════════════════════════════════════
+    match /Consentimientos/{uid} {
+      allow read:             if request.auth != null && request.auth.uid == uid;
+      allow create, update,
+            delete:           if false;
+    }
   }
 }

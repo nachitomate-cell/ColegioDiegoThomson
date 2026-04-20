@@ -1,5 +1,6 @@
 import './globals.css'
 import { Toaster } from 'sonner'
+import Link from 'next/link'
 
 export const metadata = {
   title: 'Portal Escolar — Colegio Diego Thomson',
@@ -32,6 +33,15 @@ export default function RootLayout({ children }) {
       <body className="bg-surface-900 text-ink-primary antialiased font-sans">
         {children}
         <Toaster richColors position="top-right" />
+        <footer className="border-t border-surface-600 py-3 px-4 text-center text-xs text-ink-disabled">
+          © {new Date().getFullYear()} Colegio Diego Thomson
+          {' · '}
+          <Link href="/privacidad" className="hover:text-ink-muted underline underline-offset-2 transition-colors">
+            Política de Privacidad
+          </Link>
+          {' · '}
+          <span className="text-ink-disabled/60">Términos de Uso</span>
+        </footer>
       </body>
     </html>
   )
