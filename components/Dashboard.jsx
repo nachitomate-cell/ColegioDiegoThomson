@@ -15,8 +15,9 @@ import { useAuth }        from '../hooks/useAuth'
 import { useEstudiante }  from '../hooks/useEstudiante'
 import { useCuotas }      from '../hooks/useCuotas'
 import { useCuotasCGPA }  from '../hooks/useCuotasCGPA'
-import { generarReciboPDF } from '../lib/generarReciboPDF'
-import { LOGO_SRC }         from '../lib/logo'
+import { generarReciboPDF }      from '../lib/generarReciboPDF'
+import { LOGO_SRC }              from '../lib/logo'
+import PaymentLoadingOverlay     from './PaymentLoadingOverlay'
 
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -1087,6 +1088,11 @@ export default function Dashboard() {
   const [modalPagarCuota, setModalPagarCuota] = useState(null)
   const [khipuScriptListo, setKhipuScriptListo] = useState(false)
 
+  // ── Loading overlay de pago ───────────────────────────────────────────────
+  const [pagoLoading,  setPagoLoading]  = useState(false)
+  const [pagoEstado,   setPagoEstado]   = useState('iniciando')
+  const [pagoPasarela, setPagoPasarela] = useState('Webpay')
+
 
   const handlePagarSeleccion = (cuota) => {
     if (pagoEnProceso) return
@@ -1096,6 +1102,12 @@ export default function Dashboard() {
   const handleProcesarPago = async (cuota, metodo, bankId = null) => {
     setModalPagarCuota(null)
     setPagoEnProceso(cuota.id)
+
+    // ── Mostrar overlay inmediatamente ────────────────────────────────────────
+    const pasarela = metodo === 'khipu' ? 'Khipu' : 'Webpay'
+    setPagoPasarela(pasarela)
+    setPagoEstado('iniciando')
+    setPagoLoading(true)
 
     try {
       const endpoint = metodo === 'khipu' ? '/api/khipu/iniciar' : '/api/pago/iniciar'
@@ -1119,52 +1131,50 @@ export default function Dashboard() {
 
       if (!res.ok) {
         toast.error(data.error ?? 'Error al iniciar el pago. Intenta nuevamente.')
-        setPagoEnProceso(null)
+        setPagoEstado('error')
+        setTimeout(() => { setPagoLoading(false); setPagoEnProceso(null) }, 1500)
         return
       }
 
+      // ── Cambiar a "redirigiendo" con breve pausa para que el usuario lo vea ─
+      setPagoEstado('redirigiendo')
+      await new Promise(r => setTimeout(r, 600))
+
       if (metodo === 'khipu') {
-        // Khipu: mostrar pago en modal si el SDK está disponible,
-        // si no redirigir directamente a payment_url (fallback).
+        // Khipu modal SDK: cerrar overlay antes de que Khipu tome el control
         if (khipuScriptListo && typeof window.Khipu !== 'undefined') {
+          setPagoLoading(false)
           const khipu = new window.Khipu()
           khipu.startOperation(
             data.payment_id,
             (result) => {
               console.log('[Khipu] callback:', result)
               setPagoEnProceso(null)
-              if (result.result === 'ok') {
-                refreshCuotas()
-              }
+              if (result.result === 'ok') refreshCuotas()
             },
             {
               mountElement: document.getElementById('khenshin-web-root'),
               modal: true,
               modalOptions: { maxWidth: 450, maxHeight: 860 },
               options: {
-                style: {
-                  primaryColor: '#8347AD',
-                  fontFamily:   'Roboto',
-                },
+                style: { primaryColor: '#8347AD', fontFamily: 'Roboto' },
                 skipExitPage: false,
               },
             }
           )
         } else {
-          // Fallback: redirigir a la URL de pago de Khipu
+          // Fallback: overlay queda hasta que el navegador navega
           window.location.href = data.payment_url
         }
       } else {
-        // Transbank requiere form POST
-        const form = document.createElement('form')
+        // Transbank form POST: overlay queda hasta que el navegador navega
+        const form  = document.createElement('form')
         form.method = 'POST'
         form.action = data.url
-
         const input = document.createElement('input')
         input.type  = 'hidden'
         input.name  = 'token_ws'
         input.value = data.token
-
         form.appendChild(input)
         document.body.appendChild(form)
         form.submit()
@@ -1172,7 +1182,8 @@ export default function Dashboard() {
     } catch (err) {
       console.error('[Dashboard] Error al iniciar pago:', err)
       toast.error('Error de conexión. Verifica tu red e intenta nuevamente.')
-      setPagoEnProceso(null)
+      setPagoEstado('error')
+      setTimeout(() => { setPagoLoading(false); setPagoEnProceso(null) }, 1500)
     }
   }
 
@@ -1404,6 +1415,13 @@ export default function Dashboard() {
         src="https://js.khipu.com/v2/khenshin.js"
         strategy="afterInteractive"
         onLoad={() => setKhipuScriptListo(true)}
+      />
+
+      {/* ── Loading overlay de pago ───────────────────────────────────────────── */}
+      <PaymentLoadingOverlay
+        visible={pagoLoading}
+        estado={pagoEstado}
+        pasarela={pagoPasarela}
       />
 
     </div>
