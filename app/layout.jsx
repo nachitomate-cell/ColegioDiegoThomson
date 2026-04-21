@@ -1,6 +1,7 @@
 import './globals.css'
 import { Toaster } from 'sonner'
 import Link from 'next/link'
+import { Analytics } from '@vercel/analytics/next'
 
 export const metadata = {
   title: 'Portal Escolar — Colegio Diego Thomson',
@@ -32,6 +33,7 @@ export default function RootLayout({ children }) {
     <html lang="es">
       <body className="bg-surface-900 text-ink-primary antialiased font-sans">
         {children}
+        <Analytics />
         <Toaster richColors position="top-right" />
         <footer className="border-t border-surface-600 py-3 px-4 text-center text-xs text-ink-disabled">
           © {new Date().getFullYear()} Colegio Diego Thomson
