@@ -73,7 +73,7 @@ service cloud.firestore {
 
     // Un apoderado puede leer los docs de sus hijos (mismo apoderado_rut_limpio).
     // Permite construir el selector de hijo sin exponer datos de otros apoderados.
-    function esHermano(estudianteId) {
+    function esHermano() {
       return request.auth != null
           && exists(/databases/$(database)/documents/Estudiantes/$(request.auth.uid))
           && resource.data.apoderado_rut_limpio != null
@@ -83,7 +83,7 @@ service cloud.firestore {
 
     match /Estudiantes/{estudianteId} {
       // Lectura: el propio alumno, sus hermanos (mismo apoderado) o personal
-      allow read:   if esElEstudiante(estudianteId) || esHermano(estudianteId) || esPersonal();
+      allow read:   if esElEstudiante(estudianteId) || esHermano() || esPersonal();
 
       // Creación: solo personal (formulario de matrícula)
       allow create: if esPersonal();
