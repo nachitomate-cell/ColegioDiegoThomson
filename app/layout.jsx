@@ -6,12 +6,11 @@ export const metadata = {
   title: 'Portal Escolar — Colegio Diego Thomson',
   description: 'Plataforma oficial de pagos y gestión escolar.',
   manifest: '/manifest.json',
-  // Soporte iOS (Safari no lee el manifest automáticamente)
+  // Soporte iOS — capable eliminado (deprecado en iOS 17+, reemplazado
+  // por display:"standalone" en manifest.json para iOS 16.4+)
   appleWebApp: {
-    capable: true,
     statusBarStyle: 'default',
     title: 'Portal CDT',
-    startupImage: '/icons/icon-512x512.png',
   },
   // Icono para "Añadir a pantalla de inicio" en iOS
   icons: {
