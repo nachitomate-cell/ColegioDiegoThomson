@@ -1408,14 +1408,8 @@ export default function Dashboard() {
         />
       )}
 
-      {/* ── Khipu JS SDK ─────────────────────────────────────────────────────── */}
-      {/* El div es el punto de montaje del modal de Khipu */}
-      <div id="khenshin-web-root" />
-      <Script
-        src="https://js.khipu.com/v2/khenshin.js"
-        strategy="afterInteractive"
-        onLoad={() => setKhipuScriptListo(true)}
-      />
+      {/* khenshin.js (SDK Khipu v2) removido: devolvía 404 y el flujo ya usa
+          redirección directa a payment_url (v3). Ver else en handleProcesarPago. */}
 
       {/* ── Loading overlay de pago ───────────────────────────────────────────── */}
       <PaymentLoadingOverlay
