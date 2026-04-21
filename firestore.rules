@@ -116,10 +116,13 @@ service cloud.firestore {
                get(/databases/$(database)/documents/Estudiantes/$(request.auth.uid)).data.apoderado_rut_limpio;
       }
 
-      // Cuota voluntaria (CGPA) cuyo apoderado_id coincide con el apoderado del alumno logueado
+      // Cuota cuyo apoderado_id coincide con el apoderado del alumno logueado.
+      // No se verifica es_voluntaria aquí: el query del cliente filtra solo por
+      // apoderado_id, sin ese predicado. Firestore rechazaría la query entera si
+      // la regla exige un campo que el query no garantiza en todos los resultados.
+      // La integridad de es_voluntaria se enforza en cuotaValida() (escritura).
       function esCuotaVoluntariaDelApoderado() {
         return request.auth != null
-            && resource.data.get('es_voluntaria', false) == true
             && exists(/databases/$(database)/documents/Estudiantes/$(request.auth.uid))
             && resource.data.apoderado_id ==
                get(/databases/$(database)/documents/Estudiantes/$(request.auth.uid)).data.apoderado_rut_limpio;
