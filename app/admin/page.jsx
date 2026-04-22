@@ -16,6 +16,7 @@ import { LOGO_SRC }          from '../../lib/logo'
 import { normalizar }        from '../../lib/utils'
 import { toast }             from 'sonner'
 import ModalRegistrarEstudiante from '../../components/StudentRegistrationForm'
+import { BotonFlotanteAyuda }  from '../../components/ayuda/BotonFlotanteAyuda'
 
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -1934,6 +1935,9 @@ export default function AdminPage() {
           onConfirmado={handlePagoManualConfirmado}
         />
       )}
+
+      {/* ── CENTRO DE AYUDA ─────────────────────────────────────────────── */}
+      <BotonFlotanteAyuda rol={rolEfectivo} />
 
     </div>
   )
