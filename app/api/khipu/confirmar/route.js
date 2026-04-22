@@ -119,7 +119,7 @@ export async function POST(request) {
                 const concepto = cuotaData.es_voluntaria
                   ? (cuotaData.concepto || 'Aporte voluntario')
                   : `Mensualidad ${cuotaData.mes} ${cuotaData.anio}`
-                await enviarComprobantePago({
+                const emailResult = await enviarComprobantePago({
                   apoderadoEmail,
                   apoderadoNombre:  est.apoderado_nombre || est.nombre || 'Apoderado',
                   estudianteNombre: est.nombre           || '—',
@@ -129,7 +129,11 @@ export async function POST(request) {
                   medioPago:        'Khipu',
                   transactionId:    data.payment_id,
                 })
-                console.log('[Khipu] Comprobante enviado a:', apoderadoEmail)
+                if (emailResult.ok) {
+                  console.log('[Khipu] Comprobante enviado a:', apoderadoEmail, '| id:', emailResult.id)
+                } else {
+                  console.error('[Khipu] Resend rechazó el email:', emailResult.error)
+                }
               }
             }
           }

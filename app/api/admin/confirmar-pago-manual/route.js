@@ -187,7 +187,7 @@ export async function POST(request) {
               : `Mensualidad ${cuota.mes} ${cuota.anio}`
             // Capitalizar medio de pago para mostrar en el email
             const medioPagoDisplay = medio_pago.charAt(0).toUpperCase() + medio_pago.slice(1).replace(/_/g, ' ')
-            await enviarComprobantePago({
+            const emailResult = await enviarComprobantePago({
               apoderadoEmail,
               apoderadoNombre:  est.apoderado_nombre || est.nombre || 'Apoderado',
               estudianteNombre: est.nombre           || '—',
@@ -197,7 +197,11 @@ export async function POST(request) {
               medioPago:        medioPagoDisplay,
               transactionId:    numero_comprobante?.trim() || cuota_id,
             })
-            console.log('[ConfirmarPagoManual] Comprobante enviado a:', apoderadoEmail)
+            if (emailResult.ok) {
+              console.log('[ConfirmarPagoManual] Comprobante enviado a:', apoderadoEmail, '| id:', emailResult.id)
+            } else {
+              console.error('[ConfirmarPagoManual] Resend rechazó el email:', emailResult.error)
+            }
           }
         }
       }

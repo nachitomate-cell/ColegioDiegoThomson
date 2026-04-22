@@ -118,7 +118,7 @@ async function commitToken(tokenWs, config) {
               const concepto = cuotaData.es_voluntaria
                 ? (cuotaData.concepto || 'Aporte voluntario')
                 : `Mensualidad ${cuotaData.mes} ${cuotaData.anio}`
-              await enviarComprobantePago({
+              const emailResult = await enviarComprobantePago({
                 apoderadoEmail,
                 apoderadoNombre:  est.apoderado_nombre || est.nombre || 'Apoderado',
                 estudianteNombre: est.nombre           || '—',
@@ -128,7 +128,11 @@ async function commitToken(tokenWs, config) {
                 medioPago:        'Webpay',
                 transactionId:    response.authorization_code || tokenWs,
               })
-              console.log('[Webpay] Comprobante enviado a:', apoderadoEmail)
+              if (emailResult.ok) {
+                console.log('[Webpay] Comprobante enviado a:', apoderadoEmail, '| id:', emailResult.id)
+              } else {
+                console.error('[Webpay] Resend rechazó el email:', emailResult.error)
+              }
             }
           }
         }
