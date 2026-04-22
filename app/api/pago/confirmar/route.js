@@ -4,10 +4,11 @@
 // Puede venir como POST (form-urlencoded) o GET (query param).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NextResponse }       from 'next/server'
-import { adminDb }            from '../../../../firebase/adminConfig'
-import admin                  from '../../../../firebase/adminConfig'
-import { getTransbankConfig } from '../../../../lib/transbankConfig'
+import { NextResponse }           from 'next/server'
+import { adminDb }               from '../../../../firebase/adminConfig'
+import admin                     from '../../../../firebase/adminConfig'
+import { getTransbankConfig }    from '../../../../lib/transbankConfig'
+import { enviarComprobantePago } from '../../../../lib/email/enviarComprobantePago'
 
 // ── URL base ──────────────────────────────────────────────────────────────────
 function getBaseUrl() {
@@ -71,6 +72,9 @@ async function commitToken(tokenWs, config) {
 
     // Transacción atómica: evita marcar como pagada dos veces si Transbank
     // redirige o reintenta el webhook más de una vez (idempotencia).
+    let cuotaYaPagada = false
+    let cuotaData     = null
+
     await adminDb.runTransaction(async (t) => {
       const snap = await t.get(cuotaRef)
       if (!snap.exists) {
@@ -78,9 +82,11 @@ async function commitToken(tokenWs, config) {
         return
       }
       if (snap.data().estado === 'pagado') {
+        cuotaYaPagada = true
         console.warn('[Transbank] cuota ya estaba pagada, ignorando duplicado:', cuotaId)
         return
       }
+      cuotaData = snap.data()
       t.update(cuotaRef, {
         estado:                   'pagado',
         fecha_pago:               admin.firestore.FieldValue.serverTimestamp(),
@@ -91,6 +97,46 @@ async function commitToken(tokenWs, config) {
         transbank_amount:         response.amount,
       })
     })
+
+    // ── Enviar email de comprobante (best-effort, nunca bloquea el pago) ──────
+    if (!cuotaYaPagada && cuotaData) {
+      try {
+        const estudianteId = cuotaData.estudiante_id
+        if (!estudianteId) {
+          console.warn('[Webpay] cuota sin estudiante_id, no se envía email:', cuotaId)
+        } else {
+          const estSnap = await adminDb.collection('Estudiantes').doc(estudianteId).get()
+          if (!estSnap.exists) {
+            console.warn('[Webpay] estudiante no encontrado para email:', estudianteId)
+          } else {
+            const est            = estSnap.data()
+            const apoderadoEmail = est.apoderado_email || null
+            if (!apoderadoEmail) {
+              console.warn('[Webpay] apoderado sin email registrado, no se envía comprobante',
+                { estudianteId, cuotaId })
+            } else {
+              const concepto = cuotaData.es_voluntaria
+                ? (cuotaData.concepto || 'Aporte voluntario')
+                : `Mensualidad ${cuotaData.mes} ${cuotaData.anio}`
+              await enviarComprobantePago({
+                apoderadoEmail,
+                apoderadoNombre:  est.apoderado_nombre || est.nombre || 'Apoderado',
+                estudianteNombre: est.nombre           || '—',
+                concepto,
+                monto:            response.amount,
+                fechaPago:        new Date(),
+                medioPago:        'Webpay',
+                transactionId:    response.authorization_code || tokenWs,
+              })
+              console.log('[Webpay] Comprobante enviado a:', apoderadoEmail)
+            }
+          }
+        }
+      } catch (emailErr) {
+        // El email es best-effort: un fallo aquí NUNCA revierte el pago.
+        console.error('[Webpay] Error enviando comprobante por email:', emailErr.message)
+      }
+    }
 
     return NextResponse.redirect(
       `${base}/pago/resultado?success=true` +
