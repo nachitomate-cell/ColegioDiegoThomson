@@ -4,9 +4,10 @@
 // se completa. El body JSON incluye payment_id y transaction_id directamente
 // (no hay notification_token en v3). Se verifica con GET /v3/payments/{id}.
 // ─────────────────────────────────────────────────────────────────────────────
-import { NextResponse } from 'next/server'
-import { adminDb }      from '../../../../firebase/adminConfig'
-import admin            from '../../../../firebase/adminConfig'
+import { NextResponse }           from 'next/server'
+import { adminDb }               from '../../../../firebase/adminConfig'
+import admin                     from '../../../../firebase/adminConfig'
+import { enviarComprobantePago } from '../../../../lib/email/enviarComprobantePago'
 
 const KHIPU_V3_URL = 'https://payment-api.khipu.com/v3/payments'
 
@@ -73,13 +74,18 @@ export async function POST(request) {
     if (data.status === 'done') {
       const cuotaRef = adminDb.collection('Cuotas').doc(verifiedCuotaId)
 
+      let cuotaYaPagada  = false
+      let cuotaData      = null
+
       await adminDb.runTransaction(async (t) => {
         const snap = await t.get(cuotaRef)
         if (!snap.exists) return
         if (snap.data().estado === 'pagado') {
+          cuotaYaPagada = true
           console.warn('[Khipu] cuota ya estaba pagada, ignorando duplicado:', verifiedCuotaId)
           return
         }
+        cuotaData = snap.data()
         t.update(cuotaRef, {
           estado:           'pagado',
           fecha_pago:       admin.firestore.FieldValue.serverTimestamp(),
@@ -92,6 +98,46 @@ export async function POST(request) {
         })
       })
       console.log(`[Khipu] Cuota ${verifiedCuotaId} marcada como PAGADA (payment_id: ${data.payment_id})`)
+
+      // ── Enviar email de comprobante (best-effort, nunca bloquea el pago) ────
+      if (!cuotaYaPagada && cuotaData) {
+        try {
+          const estudianteId = cuotaData.estudiante_id
+          if (!estudianteId) {
+            console.warn('[Khipu] cuota sin estudiante_id, no se envía email:', verifiedCuotaId)
+          } else {
+            const estSnap = await adminDb.collection('Estudiantes').doc(estudianteId).get()
+            if (!estSnap.exists) {
+              console.warn('[Khipu] estudiante no encontrado para email:', estudianteId)
+            } else {
+              const est            = estSnap.data()
+              const apoderadoEmail = est.apoderado_email || null
+              if (!apoderadoEmail) {
+                console.warn('[Khipu] apoderado sin email registrado, no se envía comprobante',
+                  { estudianteId, cuotaId: verifiedCuotaId })
+              } else {
+                const concepto = cuotaData.es_voluntaria
+                  ? (cuotaData.concepto || 'Aporte voluntario')
+                  : `Mensualidad ${cuotaData.mes} ${cuotaData.anio}`
+                await enviarComprobantePago({
+                  apoderadoEmail,
+                  apoderadoNombre:  est.apoderado_nombre || est.nombre || 'Apoderado',
+                  estudianteNombre: est.nombre           || '—',
+                  concepto,
+                  monto:            cuotaData.monto,
+                  fechaPago:        new Date(),
+                  medioPago:        'Khipu',
+                  transactionId:    data.payment_id,
+                })
+                console.log('[Khipu] Comprobante enviado a:', apoderadoEmail)
+              }
+            }
+          }
+        } catch (emailErr) {
+          // El email es best-effort: un fallo aquí NUNCA revierte el pago.
+          console.error('[Khipu] Error enviando comprobante por email:', emailErr.message)
+        }
+      }
     }
 
     // Khipu requiere STATUS 200 para no reintentar la notificación
