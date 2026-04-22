@@ -21,6 +21,7 @@
 import { NextResponse }            from 'next/server'
 import { adminAuth, adminDb }      from '../../../../firebase/adminConfig'
 import admin                       from '../../../../firebase/adminConfig'
+import { enviarComprobantePago }   from '../../../../lib/email/enviarComprobantePago'
 
 const MEDIOS_VALIDOS = ['transferencia', 'efectivo', 'cheque', 'webpay_diferido', 'khipu_diferido', 'otro']
 
@@ -165,7 +166,47 @@ export async function POST(request) {
 
     console.log(`[ConfirmarPagoManual] Cuota ${cuota_id} confirmada → ${medio_pago} | admin: ${adminNombre} (${rol})`)
 
-    // ── 8. Respuesta ──────────────────────────────────────────────────────────
+    // ── 8. Enviar email de comprobante (best-effort, nunca bloquea la respuesta)
+    try {
+      const estudianteId = cuota.estudiante_id
+      if (!estudianteId) {
+        console.warn('[ConfirmarPagoManual] cuota sin estudiante_id, no se envía email:', cuota_id)
+      } else {
+        const estSnap = await adminDb.collection('Estudiantes').doc(estudianteId).get()
+        if (!estSnap.exists) {
+          console.warn('[ConfirmarPagoManual] estudiante no encontrado para email:', estudianteId)
+        } else {
+          const est            = estSnap.data()
+          const apoderadoEmail = est.apoderado_email || null
+          if (!apoderadoEmail) {
+            console.warn('[ConfirmarPagoManual] apoderado sin email registrado, no se envía comprobante',
+              { estudianteId, cuota_id })
+          } else {
+            const concepto = cuota.es_voluntaria
+              ? (cuota.concepto || 'Aporte voluntario')
+              : `Mensualidad ${cuota.mes} ${cuota.anio}`
+            // Capitalizar medio de pago para mostrar en el email
+            const medioPagoDisplay = medio_pago.charAt(0).toUpperCase() + medio_pago.slice(1).replace(/_/g, ' ')
+            await enviarComprobantePago({
+              apoderadoEmail,
+              apoderadoNombre:  est.apoderado_nombre || est.nombre || 'Apoderado',
+              estudianteNombre: est.nombre           || '—',
+              concepto,
+              monto:            cuota.monto,
+              fechaPago:        fechaPagoDate,
+              medioPago:        medioPagoDisplay,
+              transactionId:    numero_comprobante?.trim() || cuota_id,
+            })
+            console.log('[ConfirmarPagoManual] Comprobante enviado a:', apoderadoEmail)
+          }
+        }
+      }
+    } catch (emailErr) {
+      // El email es best-effort: un fallo aquí NUNCA afecta la confirmación del pago.
+      console.error('[ConfirmarPagoManual] Error enviando comprobante por email:', emailErr.message)
+    }
+
+    // ── 9. Respuesta ──────────────────────────────────────────────────────────
     // El PDF se genera en el cliente tras recibir { ok: true }.
     return NextResponse.json({ ok: true, cuota_id })
 
