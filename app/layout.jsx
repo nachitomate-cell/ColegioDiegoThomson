@@ -1,6 +1,7 @@
 import './globals.css'
 import { Toaster } from 'sonner'
 import Link from 'next/link'
+import { Analytics } from '@vercel/analytics/next'
 
 export const metadata = {
   title: 'Portal Escolar — Colegio Diego Thomson',
@@ -41,6 +42,7 @@ export default function RootLayout({ children }) {
           {' · '}
           <span className="text-ink-disabled/60">Términos de Uso</span>
         </footer>
+        <Analytics />
       </body>
     </html>
   )
