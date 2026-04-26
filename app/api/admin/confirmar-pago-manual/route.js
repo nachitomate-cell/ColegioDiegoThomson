@@ -22,21 +22,9 @@ import { NextResponse }            from 'next/server'
 import { adminAuth, adminDb }      from '../../../../firebase/adminConfig'
 import admin                       from '../../../../firebase/adminConfig'
 import { enviarComprobantePago }   from '../../../../lib/email/enviarComprobantePago'
+import { getRolEfectivo }          from '../../../../lib/admin/auth'
 
 const MEDIOS_VALIDOS = ['transferencia', 'efectivo', 'cheque', 'webpay_diferido', 'khipu_diferido', 'otro']
-
-/**
- * Determina el rol efectivo del usuario autenticado.
- * Admin: via custom claim O doc en /Admins/{uid}
- * Secretaria: solo via custom claim role='secretaria'
- */
-async function getRolEfectivo(uid, decodedToken) {
-  if (decodedToken.role === 'admin')      return 'admin'
-  if (decodedToken.role === 'secretaria') return 'secretaria'
-  const adminSnap = await adminDb.collection('Admins').doc(uid).get()
-  if (adminSnap.exists)                   return 'admin'
-  return null
-}
 
 export async function POST(request) {
   try {

@@ -12,14 +12,7 @@
 import { NextResponse }       from 'next/server'
 import { adminAuth, adminDb } from '../../../../firebase/adminConfig'
 import admin                  from '../../../../firebase/adminConfig'
-
-async function getRolEfectivo(uid, decodedToken) {
-  if (decodedToken.role === 'admin')      return 'admin'
-  if (decodedToken.role === 'secretaria') return 'secretaria'
-  const adminSnap = await adminDb.collection('Admins').doc(uid).get()
-  if (adminSnap.exists)                   return 'admin'
-  return null
-}
+import { getRolEfectivo }     from '../../../../lib/admin/auth'
 
 export async function POST(request) {
   try {
