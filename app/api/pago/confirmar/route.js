@@ -143,10 +143,7 @@ async function commitToken(tokenWs, config) {
     }
 
     return NextResponse.redirect(
-      `${base}/pago/resultado?success=true` +
-      `&monto=${response.amount}` +
-      `&auth=${response.authorization_code}` +
-      `&cuotaId=${cuotaId}`
+      `${base}/pago/confirmando?cuota_id=${cuotaId}&pasarela=webpay`
     )
   } else {
     console.warn('[Transbank] pago rechazado | response_code:', response.response_code, '| status:', response.status)

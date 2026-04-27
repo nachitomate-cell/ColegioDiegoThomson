@@ -82,7 +82,7 @@ export async function POST(request) {
       currency:       'CLP',
       amount:         cuota.monto,
       transaction_id: cuotaId,
-      return_url:     `${baseUrl}/pago/resultado?success=true&khipu=true&cuotaId=${cuotaId}`,
+      return_url:     `${baseUrl}/pago/confirmando?cuota_id=${cuotaId}&pasarela=khipu`,
       cancel_url:     `${baseUrl}/pago/resultado?success=false&motivo=cancelado&khipu=true`,
       ...(!esLocalUrl ? { notify_url: `${baseUrl}/api/khipu/confirmar` } : {}),
       // bank_id es opcional: si el apoderado ya eligió su banco en el portal,
